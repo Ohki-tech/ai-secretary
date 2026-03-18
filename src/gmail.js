@@ -139,7 +139,7 @@ class GmailClient {
 
   async getUnreadCount() {
     const gmail = this._getGmail();
-    const res = await gmail.users.messages.list({ userId: 'me', q: 'is:unread', maxResults: 1 });
+    const res = await gmail.users.messages.list({ userId: 'me', q: 'in:inbox is:unread', maxResults: 1 });
     return res.data.resultSizeEstimate || 0;
   }
 

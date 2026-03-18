@@ -139,15 +139,17 @@ async function dispatch(userId, userMessage, replyToken) {
     return;
   }
 
-  // 「②をアーカイブ」→ 番号でメール参照してアーカイブ処理
+  // 「②をアーカイブ」→ 番号でメール参照して即アーカイブ（確認なし）
   const archiveRef = resolveEmailRef(userMessage, session.lastEmails || []);
   if (archiveRef && /アーカイブ|archive/i.test(userMessage)) {
     session.lastMessages.push({ role: 'user', content: userMessage });
     if (session.lastMessages.length > 6) session.lastMessages.shift();
-    // 確認してからアーカイブ
-    session.pendingAction = 'gmail_archive';
-    session.pendingData = { messageId: archiveRef.id, subject: archiveRef.subject };
-    await lineClient.replyMessage(replyToken, `「${archiveRef.subject}」をアーカイブしますか？`);
+    try {
+      await gmailClient.archiveMessage(archiveRef.id);
+      await lineClient.replyMessage(replyToken, `📦 アーカイブしました\n「${archiveRef.subject}」`);
+    } catch (e) {
+      await lineClient.replyMessage(replyToken, `アーカイブに失敗しました: ${e.message}`);
+    }
     return;
   }
 
@@ -183,7 +185,7 @@ async function dispatch(userId, userMessage, replyToken) {
       const EXCLUDE_REAL_ESTATE =
         '-subject:(物件紹介 OR 新着物件 OR 物件情報 OR 不動産情報 OR 賃貸物件 OR 売買物件 OR マンション情報 OR "物件のご紹介" OR "新着のご案内" OR "おすすめ物件" OR "物件特集")' +
         ' -from:(homes.co.jp OR suumo.jp OR athome.co.jp OR chintai.com OR realestate)';
-      const emails = await gmailClient.listUnread(5, 'is:unread ' + EXCLUDE_REAL_ESTATE);
+      const emails = await gmailClient.listUnread(5, 'in:inbox is:unread ' + EXCLUDE_REAL_ESTATE);
       session.lastEmails = emails; // 番号参照のためにセッションに保存
       await lineClient.replyMessage(replyToken, formatGmailList(emails));
     } catch (e) {
@@ -259,7 +261,7 @@ async function dispatch(userId, userMessage, replyToken) {
         const EXCLUDE_REAL_ESTATE =
           '-subject:(物件紹介 OR 新着物件 OR 物件情報 OR 不動産情報 OR 賃貸物件 OR 売買物件 OR マンション情報 OR "物件のご紹介" OR "新着のご案内" OR "おすすめ物件" OR "物件特集")' +
           ' -from:(homes.co.jp OR suumo.jp OR athome.co.jp OR chintai.com OR realestate)';
-        const baseQuery = params.query || 'is:unread';
+        const baseQuery = params.query || 'in:inbox is:unread';
         const query = baseQuery + ' ' + EXCLUDE_REAL_ESTATE;
         const emails = await gmailClient.listUnread(params.max || 5, query);
         const text = formatGmailList(emails);
