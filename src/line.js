@@ -117,7 +117,7 @@ function formatGmailList(emails) {
 function _shortDate(dateStr) {
   try {
     const d = new Date(dateStr);
-    return `${d.getMonth() + 1}/${d.getDate()}`;
+    return d.toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric' }).replace('/', '/');
   } catch {
     return '';
   }

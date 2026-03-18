@@ -14,12 +14,10 @@ const gmailClient = new GmailClient();
 const AFFIRMATIVE = /^(はい|yes|ok|OK|送信|する|いいよ|お願い|大丈夫|よろしく|確定|登録|追加|削除)/i;
 const NEGATIVE = /^(いいえ|no|キャンセル|やめて|やめる|中止|取り消し)/i;
 
-// キーワードで確実に判定できるアクションを先に処理
-function quickClassify(msg) {
-  if (/メール|未読|inbox|受信|Gmail/i.test(msg)) return 'gmail';
-  if (/TODO|タスク|やること|やることリスト/i.test(msg)) return 'todo';
-  return null;
-}
+// 不動産物件紹介メール除外フィルター（1箇所で管理）
+const EXCLUDE_REAL_ESTATE =
+  '-subject:(物件紹介 OR 新着物件 OR 物件情報 OR 不動産情報 OR 賃貸物件 OR 売買物件 OR マンション情報 OR "物件のご紹介" OR "新着のご案内" OR "おすすめ物件" OR "物件特集")' +
+  ' -from:(homes.co.jp OR suumo.jp OR athome.co.jp OR chintai.com OR realestate)';
 
 const WEEKDAY_JA = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -38,7 +36,6 @@ function resolveEmailRef(msg, lastEmails) {
       return lastEmails[i];
     }
   }
-  // 「1番」「2番目」「1つ目」なども対応
   const m = msg.match(/([1-9１-９])(?:番|番目|つ目)/);
   if (m) {
     const idx = parseInt(m[1]) - 1;
@@ -60,15 +57,12 @@ function dateLabel(dateStr) {
   return `${month}月${day}日（${wd}）`;
 }
 
+// 予定の確認メッセージ用時刻フォーマット（JST固定）
 function formatEventLabel(params) {
-  const start = new Date(params.start);
-  const h = String(start.getHours()).padStart(2, '0');
-  const m = String(start.getMinutes()).padStart(2, '0');
-  const end = new Date(params.end);
-  const eh = String(end.getHours()).padStart(2, '0');
-  const em = String(end.getMinutes()).padStart(2, '0');
+  const s = new Date(params.start).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', hour12: false });
+  const e = new Date(params.end).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', hour12: false });
   const dateStr = params.start.slice(0, 10);
-  return `${dateLabel(dateStr)} ${h}:${m}〜${eh}:${em}`;
+  return `${dateLabel(dateStr)} ${s}〜${e}`;
 }
 
 async function executePending(session, replyToken) {
@@ -80,8 +74,7 @@ async function executePending(session, replyToken) {
     case 'calendar_add_force': {
       const { title, start, end, description } = pendingData;
       try {
-        // force の場合は重複チェックをスキップして直接追加
-        const result = await calendarClient.addEventForce(title, start, end, description || '');
+        await calendarClient.addEventForce(title, start, end, description || '');
         const label = formatEventLabel({ start, end });
         await lineClient.replyMessage(replyToken, `✅ 追加しました\n${title}\n${label}`);
       } catch (e) {
@@ -90,24 +83,25 @@ async function executePending(session, replyToken) {
       return;
     }
 
-    case 'gmail_archive': {
-      const { messageId, subject } = pendingData;
-      await gmailClient.archiveMessage(messageId);
-      await lineClient.replyMessage(replyToken, `📦 アーカイブしました\n「${subject}」`);
-      return;
-    }
-
     case 'gmail_send': {
       const { draftId } = pendingData;
-      await gmailClient.sendDraft(draftId);
-      await lineClient.replyMessage(replyToken, '✅ 送信しました');
+      try {
+        await gmailClient.sendDraft(draftId);
+        await lineClient.replyMessage(replyToken, '✅ 送信しました');
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `送信に失敗しました: ${e.message}`);
+      }
       return;
     }
 
     case 'calendar_delete': {
       const { eventId } = pendingData;
-      await calendarClient.deleteEvent(eventId);
-      await lineClient.replyMessage(replyToken, '🗑 削除しました');
+      try {
+        await calendarClient.deleteEvent(eventId);
+        await lineClient.replyMessage(replyToken, '🗑 削除しました');
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `削除に失敗しました: ${e.message}`);
+      }
       return;
     }
 
@@ -119,8 +113,15 @@ async function executePending(session, replyToken) {
     }
 
     default:
-      await lineClient.replyMessage(replyToken, '操作がキャンセルされました');
+      await lineClient.replyMessage(replyToken, 'キャンセルしました');
   }
+}
+
+// メール一覧取得の共通処理
+async function fetchAndShowEmails(session, replyToken, max = 5) {
+  const emails = await gmailClient.listUnread(max, `in:inbox is:unread ${EXCLUDE_REAL_ESTATE}`);
+  session.lastEmails = emails;
+  await lineClient.replyMessage(replyToken, formatGmailList(emails));
 }
 
 async function dispatch(userId, userMessage, replyToken) {
@@ -142,8 +143,6 @@ async function dispatch(userId, userMessage, replyToken) {
   // 「②をアーカイブ」→ 番号でメール参照して即アーカイブ（確認なし）
   const archiveRef = resolveEmailRef(userMessage, session.lastEmails || []);
   if (archiveRef && /アーカイブ|archive/i.test(userMessage)) {
-    session.lastMessages.push({ role: 'user', content: userMessage });
-    if (session.lastMessages.length > 6) session.lastMessages.shift();
     try {
       await gmailClient.archiveMessage(archiveRef.id);
       await lineClient.replyMessage(replyToken, `📦 アーカイブしました\n「${archiveRef.subject}」`);
@@ -156,8 +155,6 @@ async function dispatch(userId, userMessage, replyToken) {
   // 「①に〇〇と返信して」→ 番号でメール参照して返信処理
   const refEmail = resolveEmailRef(userMessage, session.lastEmails || []);
   if (refEmail && /返信|reply/i.test(userMessage)) {
-    session.lastMessages.push({ role: 'user', content: userMessage });
-    if (session.lastMessages.length > 6) session.lastMessages.shift();
     try {
       const original = await gmailClient.readMessage(refEmail.id);
       const instruction = userMessage.replace(/[①-⑩]|[1-9]番(目)?|返信して?|に$/, '').trim();
@@ -176,32 +173,17 @@ async function dispatch(userId, userMessage, replyToken) {
     return;
   }
 
-  // キーワードで確実に判定できる場合はAIをスキップ
-  const quick = quickClassify(userMessage);
-  if (quick === 'gmail') {
-    session.lastMessages.push({ role: 'user', content: userMessage });
-    if (session.lastMessages.length > 6) session.lastMessages.shift();
+  // メールキーワードは確実にメール一覧へ（todo追加・完了などと混同しないよう限定）
+  if (/未読メール|メール見せて|メールチェック|inbox/i.test(userMessage)) {
     try {
-      const EXCLUDE_REAL_ESTATE =
-        '-subject:(物件紹介 OR 新着物件 OR 物件情報 OR 不動産情報 OR 賃貸物件 OR 売買物件 OR マンション情報 OR "物件のご紹介" OR "新着のご案内" OR "おすすめ物件" OR "物件特集")' +
-        ' -from:(homes.co.jp OR suumo.jp OR athome.co.jp OR chintai.com OR realestate)';
-      const emails = await gmailClient.listUnread(5, 'in:inbox is:unread ' + EXCLUDE_REAL_ESTATE);
-      session.lastEmails = emails; // 番号参照のためにセッションに保存
-      await lineClient.replyMessage(replyToken, formatGmailList(emails));
+      await fetchAndShowEmails(session, replyToken);
     } catch (e) {
       await lineClient.replyMessage(replyToken, `メールの取得に失敗しました: ${e.message}`);
     }
     return;
   }
-  if (quick === 'todo') {
-    session.lastMessages.push({ role: 'user', content: userMessage });
-    if (session.lastMessages.length > 6) session.lastMessages.shift();
-    const items = todo.list('pending');
-    await lineClient.replyMessage(replyToken, todo.formatList(items));
-    return;
-  }
 
-  // 意図解釈
+  // 意図解釈（AI）
   const intent = await ai.parseIntent(userMessage, {
     recentMessages: session.lastMessages,
     pendingAction: session.pendingAction,
@@ -210,7 +192,7 @@ async function dispatch(userId, userMessage, replyToken) {
   session.lastMessages.push({ role: 'user', content: userMessage });
   if (session.lastMessages.length > 6) session.lastMessages.shift();
 
-  const { action, params, reply, needs_confirm } = intent;
+  const { action, params, reply } = intent;
 
   switch (action) {
     case 'calendar_list': {
@@ -231,17 +213,15 @@ async function dispatch(userId, userMessage, replyToken) {
         const conflicts = await calendarClient.checkConflict(params.start, params.end);
         if (conflicts.length > 0) {
           const conflictNames = conflicts.map(c => c.title).join('、');
-          const msg = `⚠️ 重複があります\n「${conflictNames}」が入っています。それでも追加しますか？`;
           session.pendingAction = 'calendar_add_force';
           session.pendingData = params;
-          await lineClient.replyMessage(replyToken, msg);
+          await lineClient.replyMessage(replyToken, `⚠️ 重複があります\n「${conflictNames}」が入っています。それでも追加しますか？`);
           return;
         }
         const label = formatEventLabel(params);
-        const confirmMsg = `「${params.title}」を\n${label}に追加してよいですか？`;
         session.pendingAction = 'calendar_add';
         session.pendingData = params;
-        await lineClient.replyMessage(replyToken, confirmMsg);
+        await lineClient.replyMessage(replyToken, `「${params.title}」を\n${label}に追加してよいですか？`);
       } catch (e) {
         await lineClient.replyMessage(replyToken, `カレンダー追加に失敗しました: ${e.message}`);
       }
@@ -257,15 +237,10 @@ async function dispatch(userId, userMessage, replyToken) {
 
     case 'gmail_list': {
       try {
-        // 不動産物件紹介メールを自動除外するフィルター
-        const EXCLUDE_REAL_ESTATE =
-          '-subject:(物件紹介 OR 新着物件 OR 物件情報 OR 不動産情報 OR 賃貸物件 OR 売買物件 OR マンション情報 OR "物件のご紹介" OR "新着のご案内" OR "おすすめ物件" OR "物件特集")' +
-          ' -from:(homes.co.jp OR suumo.jp OR athome.co.jp OR chintai.com OR realestate)';
         const baseQuery = params.query || 'in:inbox is:unread';
-        const query = baseQuery + ' ' + EXCLUDE_REAL_ESTATE;
-        const emails = await gmailClient.listUnread(params.max || 5, query);
-        const text = formatGmailList(emails);
-        await lineClient.replyMessage(replyToken, text);
+        const emails = await gmailClient.listUnread(params.max || 5, `${baseQuery} ${EXCLUDE_REAL_ESTATE}`);
+        session.lastEmails = emails;
+        await lineClient.replyMessage(replyToken, formatGmailList(emails));
       } catch (e) {
         await lineClient.replyMessage(replyToken, `メールの取得に失敗しました: ${e.message}`);
       }
@@ -274,24 +249,16 @@ async function dispatch(userId, userMessage, replyToken) {
 
     case 'gmail_draft': {
       try {
-        let originalBody = '';
         let originalInfo = '';
         if (params.reply_to_id) {
           const original = await gmailClient.readMessage(params.reply_to_id);
-          originalBody = original.body.slice(0, 500);
-          originalInfo = `差出人: ${original.from}\n件名: ${original.subject}\n本文:\n${originalBody}`;
+          originalInfo = `差出人: ${original.from}\n件名: ${original.subject}\n本文:\n${original.body.slice(0, 500)}`;
         }
-
-        const systemPrompt = `あなたは日本語のビジネスメールを書くアシスタントです。
-簡潔・丁寧なメール文面を作成してください。
-署名は不要です。本文のみ出力してください。`;
-        const userPrompt = params.body
-          + (originalInfo ? `\n\n--- 返信元メール ---\n${originalInfo}` : '');
-
+        const systemPrompt = `あなたは日本語のビジネスメールを書くアシスタントです。簡潔・丁寧なメール文面を作成してください。署名は不要です。本文のみ出力してください。`;
+        const userPrompt = params.body + (originalInfo ? `\n\n--- 返信元メール ---\n${originalInfo}` : '');
         const bodyText = await ai.generateReply(systemPrompt, userPrompt);
         const subject = params.subject || '（件名なし）';
         const draft = await gmailClient.createDraft(params.to, subject, bodyText, params.reply_to_id || null);
-
         const previewMsg = `以下の内容で下書き保存しました。送信しますか？\n\n─────\n${draft.preview}…\n─────`;
         session.pendingAction = 'gmail_send';
         session.pendingData = { draftId: draft.draftId };
@@ -341,11 +308,7 @@ async function dispatch(userId, userMessage, replyToken) {
 
     case 'todo_done': {
       const result = todo.complete(params.id);
-      if (result.success) {
-        await lineClient.replyMessage(replyToken, '✅ 完了しました');
-      } else {
-        await lineClient.replyMessage(replyToken, '該当するTODOが見つかりません');
-      }
+      await lineClient.replyMessage(replyToken, result.success ? '✅ 完了しました' : '該当するTODOが見つかりません');
       break;
     }
 
@@ -368,7 +331,7 @@ async function dispatch(userId, userMessage, replyToken) {
 
     case 'unknown':
     default: {
-      const helpText = reply || `すみません、もう少し具体的に教えていただけますか？\n\n例:\n・「明日の予定教えて」\n・「田中さんにメール返信して」\n・「TODOに○○を追加して」`;
+      const helpText = reply || `すみません、もう少し具体的に教えていただけますか？\n\n例:\n・「明日の予定教えて」\n・「未読メール見せて」\n・「TODOに○○を追加して」`;
       await lineClient.replyMessage(replyToken, helpText);
     }
   }
