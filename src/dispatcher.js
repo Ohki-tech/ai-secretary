@@ -11,7 +11,7 @@ const lineClient = new LineClient();
 const calendarClient = new GoogleCalendarClient();
 const gmailClient = new GmailClient();
 
-const AFFIRMATIVE = /^(はい|yes|ok|OK|送信|する|いいよ|お願い|大丈夫|よろしく|確定|登録|追加|削除)/i;
+const AFFIRMATIVE = /^(はい|yes|ok|OK|おけ|おk|おK|イエス|よい|よし|いいよ|いいです|送信|する|お願い|大丈夫|よろしく|確定|登録|追加|削除|合ってる|正しい|それで|問題ない)/i;
 const NEGATIVE = /^(いいえ|no|キャンセル|やめて|やめる|中止|取り消し)/i;
 
 // 不動産物件紹介メール除外フィルター（1箇所で管理）
