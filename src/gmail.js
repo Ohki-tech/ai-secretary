@@ -142,6 +142,16 @@ class GmailClient {
     const res = await gmail.users.messages.list({ userId: 'me', q: 'is:unread', maxResults: 1 });
     return res.data.resultSizeEstimate || 0;
   }
+
+  async archiveMessage(messageId) {
+    const gmail = this._getGmail();
+    await gmail.users.messages.modify({
+      userId: 'me',
+      id: messageId,
+      requestBody: { removeLabelIds: ['INBOX'] },
+    });
+    return { success: true };
+  }
 }
 
 module.exports = { GmailClient };

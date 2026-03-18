@@ -90,6 +90,13 @@ async function executePending(session, replyToken) {
       return;
     }
 
+    case 'gmail_archive': {
+      const { messageId, subject } = pendingData;
+      await gmailClient.archiveMessage(messageId);
+      await lineClient.replyMessage(replyToken, `📦 アーカイブしました\n「${subject}」`);
+      return;
+    }
+
     case 'gmail_send': {
       const { draftId } = pendingData;
       await gmailClient.sendDraft(draftId);
@@ -129,6 +136,18 @@ async function dispatch(userId, userMessage, replyToken) {
   if (session.pendingAction && NEGATIVE.test(userMessage.trim())) {
     clearPending(session);
     await lineClient.replyMessage(replyToken, 'キャンセルしました');
+    return;
+  }
+
+  // 「②をアーカイブ」→ 番号でメール参照してアーカイブ処理
+  const archiveRef = resolveEmailRef(userMessage, session.lastEmails || []);
+  if (archiveRef && /アーカイブ|archive/i.test(userMessage)) {
+    session.lastMessages.push({ role: 'user', content: userMessage });
+    if (session.lastMessages.length > 6) session.lastMessages.shift();
+    // 確認してからアーカイブ
+    session.pendingAction = 'gmail_archive';
+    session.pendingData = { messageId: archiveRef.id, subject: archiveRef.subject };
+    await lineClient.replyMessage(replyToken, `「${archiveRef.subject}」をアーカイブしますか？`);
     return;
   }
 
