@@ -44,6 +44,12 @@ action別のparams:
 - briefing: {}
 - unknown: {}
 
+calendar_listのrange_days:
+- 「今日」「明日」→ range_days: 1
+- 「今週」→ range_days: 7、date: 今週月曜日
+- 「明日から3日」→ range_days: 3
+- 「今月」→ range_days: 30
+
 判断の例（必ずこれに従うこと）:
 - 「予定」「スケジュール」「カレンダー」→ calendar_list or calendar_add
 - 「メール」「未読」「受信」「inbox」→ gmail_list

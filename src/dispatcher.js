@@ -122,9 +122,10 @@ async function dispatch(userId, userMessage, replyToken) {
   switch (action) {
     case 'calendar_list': {
       try {
-        const events = await calendarClient.listEvents(params.date, params.range_days || 1);
-        const label = dateLabel(params.date);
-        const text = formatCalendarEvents(events, label);
+        const rangeDays = params.range_days || 1;
+        const events = await calendarClient.listEvents(params.date, rangeDays);
+        const label = rangeDays > 1 ? `${dateLabel(params.date)}〜` : dateLabel(params.date);
+        const text = formatCalendarEvents(events, label, rangeDays);
         await lineClient.replyMessage(replyToken, text);
       } catch (e) {
         await lineClient.replyMessage(replyToken, `カレンダーの取得に失敗しました: ${e.message}`);

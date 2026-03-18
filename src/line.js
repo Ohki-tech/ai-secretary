@@ -47,11 +47,36 @@ class LineClient {
   }
 }
 
-function formatCalendarEvents(events, dateLabel = '') {
+function formatCalendarEvents(events, dateLabel = '', rangeDays = 1) {
+  // 複数日の場合は日付ごとにグループ化して表示
+  if (rangeDays > 1) {
+    if (!events || events.length === 0) {
+      return `📅 ${dateLabel}\n予定はありません`;
+    }
+    // 日付ごとにグループ化
+    const groups = {};
+    for (const e of events) {
+      const dateKey = (e.start || '').slice(0, 10);
+      if (!groups[dateKey]) groups[dateKey] = [];
+      groups[dateKey].push(e);
+    }
+    const lines = [`📅 ${dateLabel}（${events.length}件）`, '━━━━━━━━━━'];
+    for (const dateKey of Object.keys(groups).sort()) {
+      lines.push(_dateLabel(dateKey));
+      for (const e of groups[dateKey]) {
+        const s = e.start ? _formatTime(e.start) : '';
+        const en = e.end ? _formatTime(e.end) : '';
+        const timeStr = s && en ? `  ${s}〜${en} ` : '  ';
+        lines.push(`${timeStr}${e.title}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  // 1日分の通常表示
   if (!events || events.length === 0) {
     return `📅 ${dateLabel}\n予定はありません`;
   }
-
   const lines = [`📅 ${dateLabel}の予定（${events.length}件）`, '━━━━━━━━━━'];
   for (const e of events) {
     const start = e.start ? _formatTime(e.start) : '';
