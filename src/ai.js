@@ -44,6 +44,13 @@ action別のparams:
 - briefing: {}
 - unknown: {}
 
+判断の例（必ずこれに従うこと）:
+- 「予定」「スケジュール」「カレンダー」→ calendar_list or calendar_add
+- 「メール」「未読」「受信」「inbox」→ gmail_list
+- 「TODO」「タスク」「やること」→ todo_list or todo_add
+- 「未読メールみせて」→ gmail_list（絶対にcalendar系にしない）
+- 「今日の予定」→ calendar_list（絶対にgmail系にしない）
+
 今日の日時(JST): ${now}`;
 
   const messages = [];
