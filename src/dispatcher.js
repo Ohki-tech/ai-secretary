@@ -25,9 +25,26 @@ const WEEKDAY_JA = ['日', '月', '火', '水', '木', '金', '土'];
 
 function getSession(userId) {
   if (!sessions.has(userId)) {
-    sessions.set(userId, { pendingAction: null, pendingData: {}, lastMessages: [] });
+    sessions.set(userId, { pendingAction: null, pendingData: {}, lastMessages: [], lastEmails: [] });
   }
   return sessions.get(userId);
+}
+
+// 「①」「②」などの番号からメールを解決する
+const NUM_CHARS = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
+function resolveEmailRef(msg, lastEmails) {
+  for (let i = 0; i < NUM_CHARS.length; i++) {
+    if (msg.includes(NUM_CHARS[i]) && lastEmails[i]) {
+      return lastEmails[i];
+    }
+  }
+  // 「1番」「2番目」「1つ目」なども対応
+  const m = msg.match(/([1-9１-９])(?:番|番目|つ目)/);
+  if (m) {
+    const idx = parseInt(m[1]) - 1;
+    if (lastEmails[idx]) return lastEmails[idx];
+  }
+  return null;
 }
 
 function clearPending(session) {
@@ -115,6 +132,29 @@ async function dispatch(userId, userMessage, replyToken) {
     return;
   }
 
+  // 「①に〇〇と返信して」→ 番号でメール参照して返信処理
+  const refEmail = resolveEmailRef(userMessage, session.lastEmails || []);
+  if (refEmail && /返信|reply/i.test(userMessage)) {
+    session.lastMessages.push({ role: 'user', content: userMessage });
+    if (session.lastMessages.length > 6) session.lastMessages.shift();
+    try {
+      const original = await gmailClient.readMessage(refEmail.id);
+      const instruction = userMessage.replace(/[①-⑩]|[1-9]番(目)?|返信して?|に$/, '').trim();
+      const systemPrompt = `あなたは日本語のビジネスメールを書くアシスタントです。簡潔・丁寧なメール文面を作成してください。署名は不要です。本文のみ出力してください。`;
+      const userPrompt = `以下の指示でメールを返信してください。\n指示: ${instruction}\n\n--- 返信元メール ---\nFrom: ${original.from}\n件名: ${original.subject}\n本文:\n${original.body.slice(0, 500)}`;
+      const bodyText = await ai.generateReply(systemPrompt, userPrompt);
+      const subject = original.subject.startsWith('Re:') ? original.subject : `Re: ${original.subject}`;
+      const draft = await gmailClient.createDraft(original.from, subject, bodyText, refEmail.id);
+      const previewMsg = `以下の内容で下書き保存しました。送信しますか？\n\n宛先: ${original.from}\n件名: ${subject}\n─────\n${draft.preview}…\n─────`;
+      session.pendingAction = 'gmail_send';
+      session.pendingData = { draftId: draft.draftId };
+      await lineClient.replyMessage(replyToken, previewMsg);
+    } catch (e) {
+      await lineClient.replyMessage(replyToken, `返信の作成に失敗しました: ${e.message}`);
+    }
+    return;
+  }
+
   // キーワードで確実に判定できる場合はAIをスキップ
   const quick = quickClassify(userMessage);
   if (quick === 'gmail') {
@@ -125,6 +165,7 @@ async function dispatch(userId, userMessage, replyToken) {
         '-subject:(物件紹介 OR 新着物件 OR 物件情報 OR 不動産情報 OR 賃貸物件 OR 売買物件 OR マンション情報 OR "物件のご紹介" OR "新着のご案内" OR "おすすめ物件" OR "物件特集")' +
         ' -from:(homes.co.jp OR suumo.jp OR athome.co.jp OR chintai.com OR realestate)';
       const emails = await gmailClient.listUnread(5, 'is:unread ' + EXCLUDE_REAL_ESTATE);
+      session.lastEmails = emails; // 番号参照のためにセッションに保存
       await lineClient.replyMessage(replyToken, formatGmailList(emails));
     } catch (e) {
       await lineClient.replyMessage(replyToken, `メールの取得に失敗しました: ${e.message}`);
