@@ -60,7 +60,10 @@ action別のparams:
       messages,
     });
 
-    const text = response.content[0].text.trim();
+    let text = response.content[0].text.trim();
+    // マークダウンコードブロックを除去
+    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    console.log('[ai.parseIntent] raw:', text.slice(0, 200));
     const parsed = JSON.parse(text);
     return parsed;
   } catch (err) {
