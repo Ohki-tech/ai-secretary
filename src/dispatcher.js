@@ -186,8 +186,12 @@ async function dispatch(userId, userMessage, replyToken) {
       // TODO完了も同様にAIへ
     } else {
       // それ以外はTODO一覧表示
-      const items = await todo.list('pending');
-      await lineClient.replyMessage(replyToken, await todo.formatList(items));
+      try {
+        const items = await todo.list('pending');
+        await lineClient.replyMessage(replyToken, await todo.formatList(items));
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `TODO一覧の取得に失敗しました: ${e.message}`);
+      }
       return;
     }
   }
@@ -314,20 +318,34 @@ async function dispatch(userId, userMessage, replyToken) {
     }
 
     case 'todo_add': {
-      const added = await todo.add(params.title, params.due_date || null, params.priority || 'normal');
-      await lineClient.replyMessage(replyToken, `✅ TODOに追加しました\n${added.title}`);
+      try {
+        const added = await todo.add(params.title, params.due_date || null, params.priority || 'normal');
+        await lineClient.replyMessage(replyToken, `✅ TODOに追加しました\n${added.title}`);
+      } catch (e) {
+        console.error('[todo_add] error:', e.message);
+        await lineClient.replyMessage(replyToken, `TODO追加に失敗しました: ${e.message}`);
+      }
       break;
     }
 
     case 'todo_list': {
-      const items = await todo.list(params.filter || 'pending');
-      await lineClient.replyMessage(replyToken, await todo.formatList(items));
+      try {
+        const items = await todo.list(params.filter || 'pending');
+        await lineClient.replyMessage(replyToken, await todo.formatList(items));
+      } catch (e) {
+        console.error('[todo_list] error:', e.message);
+        await lineClient.replyMessage(replyToken, `TODO一覧の取得に失敗しました: ${e.message}`);
+      }
       break;
     }
 
     case 'todo_done': {
-      const result = await todo.complete(params.id);
-      await lineClient.replyMessage(replyToken, result.success ? '✅ 完了しました' : '該当するTODOが見つかりません');
+      try {
+        const result = await todo.complete(params.id);
+        await lineClient.replyMessage(replyToken, result.success ? '✅ 完了しました' : '該当するTODOが見つかりません');
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `TODO完了に失敗しました: ${e.message}`);
+      }
       break;
     }
 
