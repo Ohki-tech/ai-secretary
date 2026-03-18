@@ -127,6 +127,9 @@ async function fetchAndShowEmails(session, replyToken, max = 5) {
 async function dispatch(userId, userMessage, replyToken) {
   const session = getSession(userId);
 
+  // 表記ゆれを正規化（To do / to-do → TODO）
+  userMessage = userMessage.replace(/[Tt]o[\s\-]?[Dd]o/g, 'TODO');
+
   // 肯定応答
   if (session.pendingAction && AFFIRMATIVE.test(userMessage.trim())) {
     await executePending(session, replyToken);
@@ -171,6 +174,22 @@ async function dispatch(userId, userMessage, replyToken) {
       await lineClient.replyMessage(replyToken, `返信の作成に失敗しました: ${e.message}`);
     }
     return;
+  }
+
+  // TODO操作をキーワードで確実に判定
+  if (/TODO/i.test(userMessage)) {
+    if (/追加|ついか|加えて|入れて|add/i.test(userMessage)) {
+      // TODO追加 → AIに任せる（タイトル・期限・優先度の抽出が必要）
+      // ただしAIへのヒントとして明示的にtodo_addを示すプレフィックスを付与しない
+      // → 下のAI処理に流れるが、正規化済みの"TODO"で正しく判定される
+    } else if (/完了|終わった|done|済み/i.test(userMessage)) {
+      // TODO完了も同様にAIへ
+    } else {
+      // それ以外はTODO一覧表示
+      const items = todo.list('pending');
+      await lineClient.replyMessage(replyToken, todo.formatList(items));
+      return;
+    }
   }
 
   // メールキーワードは確実にメール一覧へ（todo追加・完了などと混同しないよう限定）
