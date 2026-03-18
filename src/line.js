@@ -65,9 +65,7 @@ function formatCalendarEvents(events, dateLabel = '') {
 function _formatTime(isoStr) {
   if (!isoStr || isoStr.length <= 10) return '';
   const d = new Date(isoStr);
-  const h = String(d.getHours()).padStart(2, '0');
-  const m = String(d.getMinutes()).padStart(2, '0');
-  return `${h}:${m}`;
+  return d.toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 function _dateLabel(isoStr) {
