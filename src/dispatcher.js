@@ -174,6 +174,14 @@ function resolveEmailRef(msg, lastEmails) {
   return null;
 }
 
+// AIがメール本文にヘッダー行（件名:/Subject:/To:等）を混入した場合に除去
+function cleanEmailBody(text) {
+  return text
+    .replace(/^(?:件名|Subject|宛先|To|From|差出人)[：:]\s*.+(\r?\n)?/gim, '')
+    .replace(/^\s*\r?\n/, '') // 先頭の空行を除去
+    .trim();
+}
+
 function clearPending(session) {
   session.pendingAction = null;
   session.pendingData = {};
@@ -461,7 +469,7 @@ async function dispatch(userId, userMessage, replyToken) {
       // lastDraftPreview があれば利用
       const prevPreview = session.lastDraftPreview || '';
       const userPrompt = `以下のメール本文に指示を適用してください。\n指示: ${instruction}\n\n既存本文（冒頭のみ）:\n${prevPreview}`;
-      const newBody = await ai.generateReply(systemPrompt, userPrompt);
+      const newBody = cleanEmailBody(await ai.generateReply(systemPrompt, userPrompt));
       // 新しいドラフトを作成（既存は削除せず上書き用に新規作成）
       const draftInfo = session.lastDraftInfo || {};
       const draft = await gmailClient.createDraft(
@@ -522,7 +530,7 @@ async function dispatch(userId, userMessage, replyToken) {
         const bodyInstruction = userMessage.match(/[『「](.*?)[』」]/) ? userMessage.match(/[『「](.*?)[』」]/)[1] : instruction;
         const systemPrompt = `あなたは日本語のビジネスメールを書くアシスタントです。簡潔・丁寧なメール文面を作成してください。署名は不要です。本文のみ出力してください。`;
         const userPrompt = `以下の指示でメールを返信してください。\n指示: ${bodyInstruction}\n\n--- 返信元メール ---\nFrom: ${original.from}\n件名: ${original.subject}\n本文:\n${original.body.slice(0, 500)}`;
-        const bodyText = await ai.generateReply(systemPrompt, userPrompt);
+        const bodyText = cleanEmailBody(await ai.generateReply(systemPrompt, userPrompt));
         const subject = original.subject.startsWith('Re:') ? original.subject : `Re: ${original.subject}`;
         const draft = await gmailClient.createDraft(original.from, subject, bodyText, latestEmail.id);
         const previewMsg = `以下の内容で下書き保存しました。送信しますか？\n\n宛先: ${original.from}\n件名: ${subject}\n─────\n${draft.preview}…\n─────`;
@@ -546,7 +554,7 @@ async function dispatch(userId, userMessage, replyToken) {
       const instruction = userMessage.replace(/[①-⑩]|[1-9]番(目)?|に返信して?|に返事して?|に返答して?|返信して?|返事して?|返答して?|に$/, '').trim();
       const systemPrompt = `あなたは日本語のビジネスメールを書くアシスタントです。簡潔・丁寧なメール文面を作成してください。署名は不要です。本文のみ出力してください。`;
       const userPrompt = `以下の指示でメールを返信してください。\n指示: ${instruction}\n\n--- 返信元メール ---\nFrom: ${original.from}\n件名: ${original.subject}\n本文:\n${original.body.slice(0, 500)}`;
-      const bodyText = await ai.generateReply(systemPrompt, userPrompt);
+      const bodyText = cleanEmailBody(await ai.generateReply(systemPrompt, userPrompt));
       const subject = original.subject.startsWith('Re:') ? original.subject : `Re: ${original.subject}`;
       const draft = await gmailClient.createDraft(original.from, subject, bodyText, refEmail.id);
       const previewMsg = `以下の内容で下書き保存しました。送信しますか？\n\n宛先: ${original.from}\n件名: ${subject}\n─────\n${draft.preview}…\n─────`;
@@ -878,7 +886,7 @@ async function dispatch(userId, userMessage, replyToken) {
         }
         const systemPrompt = `あなたは日本語のビジネスメールを書くアシスタントです。簡潔・丁寧なメール文面を作成してください。署名は不要です。本文のみ出力してください。`;
         const userPrompt = params.body + (originalInfo ? `\n\n--- 返信元メール ---\n${originalInfo}` : '');
-        const bodyText = await ai.generateReply(systemPrompt, userPrompt);
+        const bodyText = cleanEmailBody(await ai.generateReply(systemPrompt, userPrompt));
         const subject = params.subject || '（件名なし）';
         const draft = await gmailClient.createDraft(params.to, subject, bodyText, params.reply_to_id || null);
         const previewMsg = `以下の内容で下書き保存しました。送信しますか？\n\n─────\n${draft.preview}…\n─────`;
