@@ -119,7 +119,17 @@ function extractDueDate(msg) {
 
 function getSession(userId) {
   if (!sessions.has(userId)) {
-    sessions.set(userId, { pendingAction: null, pendingData: {}, lastMessages: [], lastEmails: [], lastTodos: [], lastEvents: [] });
+    sessions.set(userId, {
+      pendingAction: null,
+      pendingData: {},
+      lastMessages: [],
+      lastEmails: [],
+      lastTodos: [],
+      lastEvents: [],
+      lastDraftId: null,
+      lastDraftPreview: '',
+      lastDraftInfo: null,
+    });
   }
   return sessions.get(userId);
 }
@@ -284,6 +294,37 @@ async function dispatch(userId, userMessage, replyToken) {
     return;
   }
 
+  // 「ドラフトに署名/本文を追加」→ 現在の下書きを更新して再プレビュー
+  if (session.lastDraftId && /署名|本文.*追加|追記|ドラフト.*修正|下書き.*修正/.test(userMessage)) {
+    try {
+      // 既存ドラフトを取得してAIで本文を更新
+      const systemPrompt = `あなたは日本語のビジネスメールを書くアシスタントです。既存のメール本文に指示の内容を追加・修正してください。本文のみ出力してください。`;
+      const instruction = userMessage;
+      // Note: gmailClient.getDraft は実装されていないため、AIに指示だけ渡して新規ドラフトを作成
+      // lastDraftPreview があれば利用
+      const prevPreview = session.lastDraftPreview || '';
+      const userPrompt = `以下のメール本文に指示を適用してください。\n指示: ${instruction}\n\n既存本文（冒頭のみ）:\n${prevPreview}`;
+      const newBody = await ai.generateReply(systemPrompt, userPrompt);
+      // 新しいドラフトを作成（既存は削除せず上書き用に新規作成）
+      const draftInfo = session.lastDraftInfo || {};
+      const draft = await gmailClient.createDraft(
+        draftInfo.to || '',
+        draftInfo.subject || '（件名なし）',
+        newBody,
+        draftInfo.replyToId || null
+      );
+      const previewMsg = `署名を追加しました。送信しますか？\n\n─────\n${draft.preview}…\n─────`;
+      session.pendingAction = 'gmail_send';
+      session.pendingData = { draftId: draft.draftId };
+      session.lastDraftId = draft.draftId;
+      session.lastDraftPreview = draft.preview;
+      await lineClient.replyMessage(replyToken, previewMsg);
+    } catch (e) {
+      await lineClient.replyMessage(replyToken, `下書き修正に失敗しました: ${e.message}`);
+    }
+    return;
+  }
+
   // 「②をアーカイブ」→ 番号でメール参照して即アーカイブ（確認なし）
   const archiveRef = resolveEmailRef(userMessage, session.lastEmails || []);
   if (archiveRef && /アーカイブ|archive/i.test(userMessage)) {
@@ -316,6 +357,33 @@ async function dispatch(userId, userMessage, replyToken) {
     }
   }
 
+  // 「直近/最新のメールに返信」→ lastEmails[0] を使用
+  if (/直近|最新|さっき.*メール|最初|最後|一番上/.test(userMessage) && /返信|reply/i.test(userMessage)) {
+    const latestEmail = (session.lastEmails || [])[0];
+    if (latestEmail) {
+      try {
+        const original = await gmailClient.readMessage(latestEmail.id);
+        const instruction = userMessage.replace(/直近|最新|さっき|最初|最後|一番上|のメール|に返信して?|返信ドラフト.*作って?/g, '').trim();
+        const bodyInstruction = userMessage.match(/[『「](.*?)[』」]/) ? userMessage.match(/[『「](.*?)[』」]/)[1] : instruction;
+        const systemPrompt = `あなたは日本語のビジネスメールを書くアシスタントです。簡潔・丁寧なメール文面を作成してください。署名は不要です。本文のみ出力してください。`;
+        const userPrompt = `以下の指示でメールを返信してください。\n指示: ${bodyInstruction}\n\n--- 返信元メール ---\nFrom: ${original.from}\n件名: ${original.subject}\n本文:\n${original.body.slice(0, 500)}`;
+        const bodyText = await ai.generateReply(systemPrompt, userPrompt);
+        const subject = original.subject.startsWith('Re:') ? original.subject : `Re: ${original.subject}`;
+        const draft = await gmailClient.createDraft(original.from, subject, bodyText, latestEmail.id);
+        const previewMsg = `以下の内容で下書き保存しました。送信しますか？\n\n宛先: ${original.from}\n件名: ${subject}\n─────\n${draft.preview}…\n─────`;
+        session.pendingAction = 'gmail_send';
+        session.pendingData = { draftId: draft.draftId };
+        session.lastDraftId = draft.draftId;
+        session.lastDraftPreview = draft.preview;
+        session.lastDraftInfo = { to: original.from, subject, replyToId: latestEmail.id };
+        await lineClient.replyMessage(replyToken, previewMsg);
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `返信の作成に失敗しました: ${e.message}`);
+      }
+      return;
+    }
+  }
+
   // 「①に〇〇と返信して」→ 番号でメール参照して返信処理
   const refEmail = resolveEmailRef(userMessage, session.lastEmails || []);
   if (refEmail && /返信|reply/i.test(userMessage)) {
@@ -330,6 +398,9 @@ async function dispatch(userId, userMessage, replyToken) {
       const previewMsg = `以下の内容で下書き保存しました。送信しますか？\n\n宛先: ${original.from}\n件名: ${subject}\n─────\n${draft.preview}…\n─────`;
       session.pendingAction = 'gmail_send';
       session.pendingData = { draftId: draft.draftId };
+      session.lastDraftId = draft.draftId;
+      session.lastDraftPreview = draft.preview;
+      session.lastDraftInfo = { to: original.from, subject, replyToId: refEmail.id };
       await lineClient.replyMessage(replyToken, previewMsg);
     } catch (e) {
       await lineClient.replyMessage(replyToken, `返信の作成に失敗しました: ${e.message}`);
@@ -350,7 +421,8 @@ async function dispatch(userId, userMessage, replyToken) {
         : null;
       if (m) {
         let rawTitle = m[1].trim();
-        const dueDate = extractDueDate(rawTitle);
+        // 期限は全メッセージから抽出（「追加して、期限は今週金曜」のようにタイトルの後ろに来る場合があるため）
+        const dueDate = extractDueDate(userMessage);
         const cleanTitle = rawTitle
           .replace(/(\d{1,2})[\/月](\d{1,2})日?(?:まで|までに)?/g, '')
           .replace(/今日|本日|明日|明後日/g, '')
@@ -416,7 +488,12 @@ async function dispatch(userId, userMessage, replyToken) {
     case 'calendar_list': {
       try {
         const rangeDays = params.range_days || 1;
-        const events = await calendarClient.listEvents(params.date, rangeDays);
+        let events = await calendarClient.listEvents(params.date, rangeDays);
+        // 「残り予定」「これから」などのキーワードがある場合は現在時刻以降のみ表示
+        if (/残り|これから|あと|まだ/.test(userMessage) && rangeDays === 1) {
+          const nowJst = jstNow();
+          events = events.filter(e => e.end && new Date(e.end) > nowJst);
+        }
         const label = rangeDays > 1 ? `${dateLabel(params.date)}〜` : dateLabel(params.date);
         const text = formatCalendarEvents(events, label, rangeDays);
         await lineClient.replyMessage(replyToken, text);
@@ -488,10 +565,16 @@ async function dispatch(userId, userMessage, replyToken) {
         if (params.new_title) updates.title = params.new_title;
         if (params.new_start) updates.start = params.new_start;
         if (params.new_end)   updates.end   = params.new_end;
-        // 開始時刻のみ変更の場合、元の長さを維持して終了時刻を自動計算
+        // 開始時刻のみ変更の場合、元の長さを維持して終了時刻を自動計算（JST形式で返す）
         if (params.new_start && !params.new_end && ev.end) {
           const origDuration = new Date(ev.end).getTime() - new Date(ev.start).getTime();
-          updates.end = new Date(new Date(params.new_start).getTime() + origDuration).toISOString();
+          const newEndMs = new Date(params.new_start).getTime() + origDuration;
+          // JST offset を維持した ISO 文字列に変換
+          const newEndDate = new Date(newEndMs);
+          const jstOffset = 9 * 60;
+          const localMs = newEndDate.getTime() + jstOffset * 60000;
+          const d = new Date(localMs);
+          updates.end = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}T${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}:00+09:00`;
         }
         const newStart = updates.start || ev.start;
         const newEnd   = updates.end   || ev.end;
@@ -533,6 +616,9 @@ async function dispatch(userId, userMessage, replyToken) {
         const previewMsg = `以下の内容で下書き保存しました。送信しますか？\n\n─────\n${draft.preview}…\n─────`;
         session.pendingAction = 'gmail_send';
         session.pendingData = { draftId: draft.draftId };
+        session.lastDraftId = draft.draftId;
+        session.lastDraftPreview = draft.preview;
+        session.lastDraftInfo = { to: params.to, subject: params.subject, replyToId: params.reply_to_id || null };
         await lineClient.replyMessage(replyToken, previewMsg);
       } catch (e) {
         await lineClient.replyMessage(replyToken, `メール下書き作成に失敗しました: ${e.message}`);
@@ -723,6 +809,75 @@ async function dispatch(userId, userMessage, replyToken) {
         );
       } catch (e) {
         await lineClient.replyMessage(replyToken, `カレンダー登録に失敗しました: ${e.message}`);
+      }
+      break;
+    }
+
+    case 'calendar_add_multi': {
+      // 複数予定を一括追加（確認ステップなしで連続追加）
+      const events = params.events || [];
+      if (!events.length) {
+        await lineClient.replyMessage(replyToken, '追加する予定が指定されていません');
+        break;
+      }
+      try {
+        const added = [];
+        const failed = [];
+        for (const ev of events) {
+          try {
+            const conflicts = await calendarClient.checkConflict(ev.start, ev.end);
+            if (conflicts.length > 0) {
+              await calendarClient.addEventForce(ev.title, ev.start, ev.end, ev.description || '');
+            } else {
+              await calendarClient.addEventForce(ev.title, ev.start, ev.end, ev.description || '');
+            }
+            added.push(`・${ev.title} ${formatEventLabel({ start: ev.start, end: ev.end })}`);
+          } catch (err) {
+            failed.push(`・${ev.title}（失敗: ${err.message}）`);
+          }
+        }
+        let msg = `✅ ${added.length}件の予定を追加しました\n${added.join('\n')}`;
+        if (failed.length) msg += `\n\n⚠️ 失敗した予定:\n${failed.join('\n')}`;
+        await lineClient.replyMessage(replyToken, msg);
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `予定の追加に失敗しました: ${e.message}`);
+      }
+      break;
+    }
+
+    case 'todo_note': {
+      // タスクにメモ/覚書を追加（Google TasksのnotesフィールドにJST保存）
+      try {
+        const keyword = params.keyword || '';
+        const note = params.note || '';
+        if (!note) {
+          await lineClient.replyMessage(replyToken, 'メモの内容を指定してください');
+          break;
+        }
+        const allTodos = await todo.list('pending');
+        const target = keyword
+          ? allTodos.find(t => t.title.includes(keyword) || keyword.includes(t.title.replace(/^【[^】]*】/, '').trim()))
+          : null;
+        if (!target) {
+          await lineClient.replyMessage(replyToken, `「${keyword}」に該当するタスクが見つかりません。\nTODO一覧を確認してください。`);
+          break;
+        }
+        // Google Tasks の notes フィールドを更新（優先度情報を維持しつつメモを追記）
+        const { google: g } = require('googleapis');
+        const tokenJson = process.env.RENDER_GOOGLE_TOKEN_JSON
+          ? JSON.parse(process.env.RENDER_GOOGLE_TOKEN_JSON)
+          : JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '../tokens/google_token.json'), 'utf8'));
+        const oauth2 = new g.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/oauth/callback');
+        oauth2.setCredentials(tokenJson);
+        const tasksApi = g.tasks({ version: 'v1', auth: oauth2 });
+        // 現在のnotes（優先度プレフィックス）に追記
+        const priorityPrefix = `priority:${target.priority || 'normal'}`;
+        const newNotes = `${priorityPrefix}\n📝 ${note}`;
+        await tasksApi.tasks.patch({ tasklist: '@default', task: target.id, requestBody: { notes: newNotes } });
+        await lineClient.replyMessage(replyToken, `📝 メモを追加しました\n${target.title}\n\n「${note}」`);
+      } catch (e) {
+        console.error('[todo_note] error:', e.message);
+        await lineClient.replyMessage(replyToken, `メモの追加に失敗しました: ${e.message}`);
       }
       break;
     }

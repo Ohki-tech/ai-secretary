@@ -20,9 +20,9 @@ async function parseIntent(userMessage, context = {}) {
 マークダウンのコードブロックや余計な文字は絶対に出力しないこと。
 
 {
-  "action": "calendar_list"|"calendar_add"|"calendar_delete"|"calendar_add_recurring"|
+  "action": "calendar_list"|"calendar_add"|"calendar_add_multi"|"calendar_update"|"calendar_delete"|"calendar_add_recurring"|
             "gmail_list"|"gmail_draft"|"gmail_send"|"gmail_read"|
-            "todo_add"|"todo_list"|"todo_done"|"todo_delete"|"todo_setup_recurring"|
+            "todo_add"|"todo_list"|"todo_done"|"todo_done_by_num"|"todo_delete"|"todo_delete_by_title"|"todo_note"|"todo_setup_recurring"|
             "briefing"|"unknown",
   "params": {},
   "reply": "ユーザーへの返答",
@@ -34,6 +34,7 @@ action別のparams:
 - calendar_add: { title: "", start: "YYYY-MM-DDTHH:mm:ss+09:00", end: "YYYY-MM-DDTHH:mm:ss+09:00", description: "" }
 - calendar_delete: { keyword: "予定タイトルの一部", date: "YYYY-MM-DD（わかる場合のみ、省略可）" }
 - calendar_update: { keyword: "予定タイトルの一部", date: "YYYY-MM-DD（わかる場合のみ）", new_title: "（変更なければ省略）", new_start: "YYYY-MM-DDTHH:mm:ss+09:00（変更なければ省略）", new_end: "YYYY-MM-DDTHH:mm:ss+09:00（変更なければ省略）" }
+- calendar_add_multi: { events: [{ title: "", start: "YYYY-MM-DDTHH:mm:ss+09:00", end: "YYYY-MM-DDTHH:mm:ss+09:00", description: "" }] }
 - calendar_add_recurring: { title: "", rrule: "FREQ=MONTHLY;BYDAY=2FR", start_date: "YYYY-MM-DD", start_time: "09:00", end_time: "09:30", description: "" }
 - gmail_list: { max: 5, query: "" }
 - gmail_draft: { to: "", subject: "", body: "", reply_to_id: "" }
@@ -45,6 +46,7 @@ action別のparams:
 - todo_done_by_num: { num: 1 }
 - todo_delete: { id: "" }
 - todo_delete_by_title: { titles: ["削除するタイトルの一部（部分一致でOK）"] }
+- todo_note: { keyword: "タスクタイトルの一部", note: "追加するメモ内容" }
 - todo_setup_recurring: {
     todos: [{ title: "", priority: "high|normal|low" }],
     reminder_title: "カレンダーリマインダーのタイトル",
@@ -69,12 +71,15 @@ RRULE早見表:
 
 判断の例（必ずこれに従うこと）:
 - 「予定」「スケジュール」「カレンダー」→ calendar_list or calendar_add
+- 「リマインダー」「リマインドをセット」→ calendar_add（予定として登録する）
+- 「朝イチ」→ 09:00 として扱う
 - 「メール」「未読」「受信」「inbox」→ gmail_list
 - 「TODO」「タスク」「やること」→ todo_list or todo_add
 - 「未読メールみせて」→ gmail_list（絶対にcalendar系にしない）
 - 「今日の予定」→ calendar_list（絶対にgmail系にしない）
 - 「予定を変更/移動/ずらして」→ calendar_update（keywordに予定名、new_start/new_endに新しい時刻）
 - 「〇〇を削除/消して」（カレンダー） → calendar_delete（keywordに予定名）
+- 「〇〇日と△△日に予定を追加」「〇〇と△△の2件を追加」など複数の異なる日時への追加 → calendar_add_multi（eventsに全件を入れる）
 - 「毎月」「繰り返し」+ TODO複数項目 + リマインド → todo_setup_recurring
 - 「①②③」形式で複数タスク + 登録 → todo_setup_recurring（todosに全項目を入れる）
 - 「登録して」「とうろく」「追加して」→ todo_add または todo_setup_recurring
@@ -86,6 +91,7 @@ RRULE早見表:
   ※ タイトルのIDは不明なので必ずtodo_delete_by_titleを使うこと。todo_deleteは使わない
 - 「①のタスクを完了」→ todo_done_by_num, num: 1
 - 「2番と3番を消して」→ titlesに具体的なタイトル文字列（番号ではなく内容）を入れる
+- 「タスクにメモを追加」「ノートを追加」「覚書を追加」→ todo_note（keywordにタスク名の一部、noteにメモ内容）
 
 今日の日時(JST): ${now}`;
 
