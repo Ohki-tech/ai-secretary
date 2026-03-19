@@ -32,16 +32,18 @@ async function parseIntent(userMessage, context = {}) {
 action別のparams:
 - calendar_list: { date: "YYYY-MM-DD", range_days: 1 }
 - calendar_add: { title: "", start: "YYYY-MM-DDTHH:mm:ss+09:00", end: "YYYY-MM-DDTHH:mm:ss+09:00", description: "" }
-- calendar_delete: { event_id: "" }
+- calendar_delete: { keyword: "予定タイトルの一部", date: "YYYY-MM-DD（わかる場合のみ、省略可）" }
+- calendar_update: { keyword: "予定タイトルの一部", date: "YYYY-MM-DD（わかる場合のみ）", new_title: "（変更なければ省略）", new_start: "YYYY-MM-DDTHH:mm:ss+09:00（変更なければ省略）", new_end: "YYYY-MM-DDTHH:mm:ss+09:00（変更なければ省略）" }
 - calendar_add_recurring: { title: "", rrule: "FREQ=MONTHLY;BYDAY=2FR", start_date: "YYYY-MM-DD", start_time: "09:00", end_time: "09:30", description: "" }
 - gmail_list: { max: 5, query: "" }
 - gmail_draft: { to: "", subject: "", body: "", reply_to_id: "" }
 - gmail_send: { draft_id: "" }
 - gmail_read: { message_id: "" }
 - todo_add: { title: "", due_date: "YYYY-MM-DD or null", priority: "high|normal|low" }
-- todo_list: { filter: "all|today|pending" }
-- todo_done: { id: 0 }
-- todo_delete: { id: 0 }
+- todo_list: { filter: "all|today|pending|completed" }
+- todo_done: { id: "" }
+- todo_done_by_num: { num: 1 }
+- todo_delete: { id: "" }
 - todo_delete_by_title: { titles: ["削除するタイトルの一部（部分一致でOK）"] }
 - todo_setup_recurring: {
     todos: [{ title: "", priority: "high|normal|low" }],
@@ -71,14 +73,18 @@ RRULE早見表:
 - 「TODO」「タスク」「やること」→ todo_list or todo_add
 - 「未読メールみせて」→ gmail_list（絶対にcalendar系にしない）
 - 「今日の予定」→ calendar_list（絶対にgmail系にしない）
+- 「予定を変更/移動/ずらして」→ calendar_update（keywordに予定名、new_start/new_endに新しい時刻）
+- 「〇〇を削除/消して」（カレンダー） → calendar_delete（keywordに予定名）
 - 「毎月」「繰り返し」+ TODO複数項目 + リマインド → todo_setup_recurring
 - 「①②③」形式で複数タスク + 登録 → todo_setup_recurring（todosに全項目を入れる）
 - 「登録して」「とうろく」「追加して」→ todo_add または todo_setup_recurring
 - 「第2金曜」「第二金曜」→ reminder_rrule: "FREQ=MONTHLY;BYDAY=2FR"
 - 「第3金曜」「第三金曜」→ FREQ=MONTHLY;BYDAY=3FR
 - TODO一覧表示は「TODO見せて」「TODO一覧」「TODOは？」など明示的に確認を求めた場合のみ
+- 「済みタスク/完了タスクを見せて」→ todo_list, filter: "completed"
 - 「〇〇のTODO消して」「下記のtodo消して」→ todo_delete_by_title（titlesにタイトルの一部を入れる）
   ※ タイトルのIDは不明なので必ずtodo_delete_by_titleを使うこと。todo_deleteは使わない
+- 「①のタスクを完了」→ todo_done_by_num, num: 1
 - 「2番と3番を消して」→ titlesに具体的なタイトル文字列（番号ではなく内容）を入れる
 
 今日の日時(JST): ${now}`;

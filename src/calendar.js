@@ -120,10 +120,59 @@ class GoogleCalendarClient {
     };
   }
 
+  // キーワード・日付でイベント検索（delete/update前の検索用）
+  async searchEvents(keyword, dateStr = null) {
+    const now = new Date();
+    const from = dateStr
+      ? new Date(`${dateStr}T00:00:00+09:00`)
+      : new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7); // 1週間前から
+    const to = dateStr
+      ? new Date(`${dateStr}T23:59:59+09:00`)
+      : new Date(from.getTime() + 30 * 24 * 60 * 60 * 1000); // 30日間
+
+    const calendar = this._getCalendar();
+    const res = await calendar.events.list({
+      calendarId: this.calendarId,
+      timeMin: from.toISOString(),
+      timeMax: to.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      q: keyword, // Google Calendar APIの全文検索
+    });
+    return (res.data.items || []).map(e => ({
+      id: e.id,
+      title: e.summary || '（タイトルなし）',
+      start: e.start.dateTime || e.start.date,
+      end: e.end.dateTime || e.end.date,
+    }));
+  }
+
   async deleteEvent(eventId) {
     const calendar = this._getCalendar();
     await calendar.events.delete({ calendarId: this.calendarId, eventId });
     return { success: true };
+  }
+
+  async updateEvent(eventId, updates = {}) {
+    const calendar = this._getCalendar();
+    const body = {};
+    if (updates.title) body.summary = updates.title;
+    if (updates.start) body.start = { dateTime: updates.start, timeZone: 'Asia/Tokyo' };
+    if (updates.end)   body.end   = { dateTime: updates.end,   timeZone: 'Asia/Tokyo' };
+    const res = await calendar.events.patch({
+      calendarId: this.calendarId,
+      eventId,
+      requestBody: body,
+    });
+    return {
+      success: true,
+      event: {
+        id: res.data.id,
+        title: res.data.summary,
+        start: (res.data.start || {}).dateTime || (res.data.start || {}).date,
+        end:   (res.data.end   || {}).dateTime || (res.data.end   || {}).date,
+      },
+    };
   }
 
   // 毎月第N曜日などの繰り返しカレンダーイベントを作成

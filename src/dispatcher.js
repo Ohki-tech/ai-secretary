@@ -119,9 +119,22 @@ function extractDueDate(msg) {
 
 function getSession(userId) {
   if (!sessions.has(userId)) {
-    sessions.set(userId, { pendingAction: null, pendingData: {}, lastMessages: [], lastEmails: [] });
+    sessions.set(userId, { pendingAction: null, pendingData: {}, lastMessages: [], lastEmails: [], lastTodos: [], lastEvents: [] });
   }
   return sessions.get(userId);
+}
+
+// ①②③からTODOを解決
+function resolveTodoRef(msg, lastTodos) {
+  for (let i = 0; i < NUM_CHARS.length; i++) {
+    if (msg.includes(NUM_CHARS[i]) && lastTodos[i]) return { todo: lastTodos[i], num: i + 1 };
+  }
+  const m = msg.match(/([1-9１-９])(?:番|番目|つ目)?(?:の)?(?:タスク|TODO)/);
+  if (m) {
+    const idx = parseInt(m[1]) - 1;
+    if (lastTodos[idx]) return { todo: lastTodos[idx], num: idx + 1 };
+  }
+  return null;
 }
 
 // 「①」「②」などの番号からメールを解決する
@@ -202,9 +215,25 @@ async function executePending(session, replyToken) {
     }
 
     case 'todo_delete': {
-      const { id } = pendingData;
-      await todo.delete(id);
-      await lineClient.replyMessage(replyToken, '🗑 削除しました');
+      const { id, title } = pendingData;
+      try {
+        await todo.delete(id);
+        await lineClient.replyMessage(replyToken, `🗑 削除しました${title ? `\n${title}` : ''}`);
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `TODO削除に失敗しました: ${e.message}`);
+      }
+      return;
+    }
+
+    case 'calendar_update': {
+      const { eventId, updates } = pendingData;
+      try {
+        const result = await calendarClient.updateEvent(eventId, updates);
+        const label = formatEventLabel({ start: result.event.start, end: result.event.end });
+        await lineClient.replyMessage(replyToken, `✅ 変更しました\n${result.event.title}\n${label}`);
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `変更に失敗しました: ${e.message}`);
+      }
       return;
     }
 
@@ -267,6 +296,26 @@ async function dispatch(userId, userMessage, replyToken) {
     return;
   }
 
+  // 「①のタスクを完了/削除にして」→ 番号でTODO参照
+  const todoRef = resolveTodoRef(userMessage, session.lastTodos || []);
+  if (todoRef) {
+    if (/完了|終わった|done|済み/i.test(userMessage)) {
+      try {
+        await todo.complete(todoRef.todo.id);
+        await lineClient.replyMessage(replyToken, `✅ 完了しました\n${todoRef.todo.title}`);
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `TODO完了に失敗しました: ${e.message}`);
+      }
+      return;
+    }
+    if (/削除|消して|消す|delete/i.test(userMessage)) {
+      session.pendingAction = 'todo_delete';
+      session.pendingData = { id: todoRef.todo.id, title: todoRef.todo.title };
+      await lineClient.replyMessage(replyToken, `「${todoRef.todo.title}」を削除しますか？`);
+      return;
+    }
+  }
+
   // 「①に〇〇と返信して」→ 番号でメール参照して返信処理
   const refEmail = resolveEmailRef(userMessage, session.lastEmails || []);
   if (refEmail && /返信|reply/i.test(userMessage)) {
@@ -306,7 +355,10 @@ async function dispatch(userId, userMessage, replyToken) {
           .replace(/(\d{1,2})[\/月](\d{1,2})日?(?:まで|までに)?/g, '')
           .replace(/今日|本日|明日|明後日/g, '')
           .replace(/(今週|来週)?(月|火|水|木|金|土|日)曜(?:まで|までに)?/g, '')
+          .replace(/期限(で|に|は|まで)?/g, '')
           .replace(/まで(に)?/g, '')
+          .replace(/[「」『』【】]/g, '')
+          .replace(/\s*[をが]\s*/g, '')
           .replace(/[\s　]+/g, ' ')
           .trim();
         const title = cleanTitle || rawTitle;
@@ -324,14 +376,17 @@ async function dispatch(userId, userMessage, replyToken) {
     } else if (/完了|終わった|done|済み/.test(userMessage)) {
       // TODO完了もAIへフォールスルー
     } else if (/見せて|一覧|リスト|確認|表示|は？|教えて/.test(userMessage)) {
-      // 明示的に一覧を要求した場合のみ直接表示
-      try {
-        const items = await todo.list('pending');
-        await lineClient.replyMessage(replyToken, await todo.formatList(items));
-      } catch (e) {
-        await lineClient.replyMessage(replyToken, `TODO一覧の取得に失敗しました: ${e.message}`);
+      // 「済み/完了タスク」はAIへ（completedフィルターが必要）
+      if (!/済み|完了/.test(userMessage)) {
+        try {
+          const items = await todo.list('pending');
+          session.lastTodos = items; // ①番号解決用に保存
+          await lineClient.replyMessage(replyToken, await todo.formatList(items));
+        } catch (e) {
+          await lineClient.replyMessage(replyToken, `TODO一覧の取得に失敗しました: ${e.message}`);
+        }
+        return;
       }
-      return;
     }
     // それ以外はAIへフォールスルー（複雑な要求はAIが解釈）
   }
@@ -392,9 +447,62 @@ async function dispatch(userId, userMessage, replyToken) {
     }
 
     case 'calendar_delete': {
-      session.pendingAction = 'calendar_delete';
-      session.pendingData = { eventId: params.event_id };
-      await lineClient.replyMessage(replyToken, `この予定を削除しますか？`);
+      // キーワードで検索してから確認
+      try {
+        const found = await calendarClient.searchEvents(params.keyword || '', params.date || null);
+        if (!found.length) {
+          await lineClient.replyMessage(replyToken, `「${params.keyword}」に該当する予定が見つかりませんでした`);
+          break;
+        }
+        if (found.length === 1) {
+          const ev = found[0];
+          const label = formatEventLabel({ start: ev.start, end: ev.end });
+          session.pendingAction = 'calendar_delete';
+          session.pendingData = { eventId: ev.id };
+          await lineClient.replyMessage(replyToken, `この予定を削除しますか？\n「${ev.title}」\n${label}`);
+        } else {
+          // 複数ヒット → 最初の3件を表示して絞り込み依頼
+          const list = found.slice(0, 3).map((ev, i) => {
+            const label = formatEventLabel({ start: ev.start, end: ev.end });
+            return `${NUM_CHARS[i]} ${ev.title} ${label}`;
+          }).join('\n');
+          session.lastEvents = found.slice(0, 3);
+          await lineClient.replyMessage(replyToken, `複数の予定が見つかりました。どれを削除しますか？\n${list}`);
+        }
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `カレンダー検索に失敗しました: ${e.message}`);
+      }
+      break;
+    }
+
+    case 'calendar_update': {
+      // キーワードで検索してから変更
+      try {
+        const found = await calendarClient.searchEvents(params.keyword || '', params.date || null);
+        if (!found.length) {
+          await lineClient.replyMessage(replyToken, `「${params.keyword}」に該当する予定が見つかりませんでした`);
+          break;
+        }
+        const ev = found[0]; // 最も近い1件を使用
+        const updates = {};
+        if (params.new_title) updates.title = params.new_title;
+        if (params.new_start) updates.start = params.new_start;
+        if (params.new_end)   updates.end   = params.new_end;
+        // 開始時刻のみ変更の場合、元の長さを維持して終了時刻を自動計算
+        if (params.new_start && !params.new_end && ev.end) {
+          const origDuration = new Date(ev.end).getTime() - new Date(ev.start).getTime();
+          updates.end = new Date(new Date(params.new_start).getTime() + origDuration).toISOString();
+        }
+        const newStart = updates.start || ev.start;
+        const newEnd   = updates.end   || ev.end;
+        const label = formatEventLabel({ start: newStart, end: newEnd });
+        session.pendingAction = 'calendar_update';
+        session.pendingData = { eventId: ev.id, updates };
+        await lineClient.replyMessage(replyToken,
+          `「${ev.title}」を以下の内容に変更してよいですか？\n${label}`);
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `カレンダー変更に失敗しました: ${e.message}`);
+      }
       break;
     }
 
@@ -470,8 +578,15 @@ async function dispatch(userId, userMessage, replyToken) {
 
     case 'todo_list': {
       try {
-        const items = await todo.list(params.filter || 'pending');
-        await lineClient.replyMessage(replyToken, await todo.formatList(items));
+        const filter = params.filter || 'pending';
+        const items = await todo.list(filter);
+        if (filter === 'pending') session.lastTodos = items; // ①番号解決用に保存
+        const msg = await todo.formatList(items);
+        // 完了済み一覧のヘッダーを変える
+        const displayMsg = filter === 'completed'
+          ? msg.replace('📋 TODO', '✅ 完了済みTODO')
+          : msg;
+        await lineClient.replyMessage(replyToken, displayMsg);
       } catch (e) {
         console.error('[todo_list] error:', e.message);
         await lineClient.replyMessage(replyToken, `TODO一覧の取得に失敗しました: ${e.message}`);
@@ -483,6 +598,23 @@ async function dispatch(userId, userMessage, replyToken) {
       try {
         const result = await todo.complete(params.id);
         await lineClient.replyMessage(replyToken, result.success ? '✅ 完了しました' : '該当するTODOが見つかりません');
+      } catch (e) {
+        await lineClient.replyMessage(replyToken, `TODO完了に失敗しました: ${e.message}`);
+      }
+      break;
+    }
+
+    case 'todo_done_by_num': {
+      // ①②③ 番号指定で完了
+      const num = parseInt(params.num) - 1;
+      const targetTodo = (session.lastTodos || [])[num];
+      if (!targetTodo) {
+        await lineClient.replyMessage(replyToken, `${params.num}番のTODOが見つかりません。先にTODO一覧を表示してください`);
+        break;
+      }
+      try {
+        await todo.complete(targetTodo.id);
+        await lineClient.replyMessage(replyToken, `✅ 完了しました\n${targetTodo.title}`);
       } catch (e) {
         await lineClient.replyMessage(replyToken, `TODO完了に失敗しました: ${e.message}`);
       }

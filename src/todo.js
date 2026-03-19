@@ -79,6 +79,7 @@ async function list(filter = 'pending') {
   const res = await tasks.tasks.list(params);
   const items = (res.data.items || []).filter(t => {
     if (filter === 'pending') return t.status !== 'completed';
+    if (filter === 'completed') return t.status === 'completed';
     if (filter === 'today') {
       const due = rfcToDueDate(t.due);
       const todayStr = new Date().toLocaleDateString('ja-JP', {
