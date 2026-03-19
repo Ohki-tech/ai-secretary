@@ -514,7 +514,8 @@ async function dispatch(userId, userMessage, replyToken) {
   // TODO操作をキーワードで確実に判定
   // ※ 「TODO」という文字列がなくても、TODOリスト形式（🟡[中]...）があればTODOコンテキストと判定
   const hasTodoKeyword = /TODO/i.test(userMessage);
-  const hasTodoListFormat = /[🔴🟡🟢]\s*\[(?:高|中|低)\]/.test(userMessage);
+  // ※ emoji を文字クラス [] に入れるとサロゲートペア問題が起きるため交替形式 (A|B|C) を使う
+  const hasTodoListFormat = /(🔴|🟡|🟢)\s*\[(?:高|中|低)\]/.test(userMessage);
   if (hasTodoKeyword || hasTodoListFormat) {
     // ── 削除を最優先でルーティング（「下記のtodo消して」「これ消して＋TODO一覧」バグ対策）──
     if (/消して|削除|消去|delete/i.test(userMessage)) {
@@ -523,9 +524,9 @@ async function dispatch(userId, userMessage, replyToken) {
         const titleLines = userMessage
           .split(/\n/)
           .map(l => {
-            // TODO一覧フォーマット: 🟡 [中] タイトル（期限: X/X）
-            const todoFmt = l.match(/[🔴🟡🟢]\s*\[(?:高|中|低)\]\s*(.+?)(?:（期限:.*?）)?\s*$/);
-            if (todoFmt) return todoFmt[1].trim();
+            // TODO一覧フォーマット: 🟡 [中] タイトル（期限: X/X）  ※交替形式で emoji を安全にマッチ
+            const todoFmt = l.match(/(🔴|🟡|🟢)\s*\[(?:高|中|低)\]\s*(.+?)(?:（期限:.*?）)?\s*$/);
+            if (todoFmt) return todoFmt[2].trim(); // グループ2がタイトル
             // 番号付きリスト: 1. タイトル、① タイトル、・タイトル
             return l.replace(/^[\s　]*(?:[\d①-⑩]+[\.。、\s　]|[・•]\s*)/, '').trim();
           })
