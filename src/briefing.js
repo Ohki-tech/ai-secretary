@@ -80,8 +80,9 @@ async function buildMailMsg(gmailClient) {
       lines.push(`${nums[i] || `${i+1}.`} ${sender}「${e.subject}」`);
     });
     return lines.join('\n');
-  } catch {
-    return '📧 未読メール: 取得できませんでした';
+  } catch (e) {
+    console.error('[briefing] メール取得エラー:', e.message);
+    return `📧 未読メール: 取得失敗\n（${e.message}）`;
   }
 }
 
@@ -90,8 +91,9 @@ async function buildTodoMsg() {
   try {
     const items = await todo.list('pending');
     return await todo.formatList(items);
-  } catch {
-    return '📋 TODO: 取得できませんでした';
+  } catch (e) {
+    console.error('[briefing] TODO取得エラー:', e.message);
+    return `📋 TODO: 取得失敗\n（${e.message}）`;
   }
 }
 
