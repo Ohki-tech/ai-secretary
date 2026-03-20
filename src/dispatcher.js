@@ -342,7 +342,8 @@ async function resolveActionText(actionItem, session, userMessage) {
     }
 
     case 'todo_list': {
-      const filter = params.filter || 'pending';
+      const rawFilter = params.filter || 'pending';
+      const filter = rawFilter === 'all' ? 'pending' : rawFilter;
       const items = await todo.list(filter);
       if (filter === 'pending') session.lastTodos = items;
       const msg = await todo.formatList(items);
@@ -726,8 +727,13 @@ async function dispatch(userId, userMessage, replyToken) {
     : [{ action: intent.action || 'unknown', params: intent.params || {}, needs_confirm: false }];
 
   if (actions.length > 1) {
+    // 書き込み系actionがある場合は一覧表示をスキップ（追加時にリスト不要）
+    const hasWriteAction = actions.some(a =>
+      ['todo_add', 'todo_setup_recurring', 'calendar_add', 'calendar_add_multi'].includes(a.action)
+    );
     const results = [];
     for (const actionItem of actions) {
+      if (hasWriteAction && (actionItem.action === 'todo_list' || actionItem.action === 'calendar_list')) continue;
       try {
         const text = await resolveActionText(actionItem, session, userMessage);
         if (text) results.push(text);
@@ -947,7 +953,9 @@ async function dispatch(userId, userMessage, replyToken) {
 
     case 'todo_list': {
       try {
-        const filter = params.filter || 'pending';
+        // 'all' は使わない（完了済みは混ぜない）
+        const rawFilter = params.filter || 'pending';
+        const filter = rawFilter === 'all' ? 'pending' : rawFilter;
         const items = await todo.list(filter);
         if (filter === 'pending') session.lastTodos = items; // ①番号解決用に保存
         const msg = await todo.formatList(items);
