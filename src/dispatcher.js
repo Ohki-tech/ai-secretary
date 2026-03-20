@@ -731,9 +731,12 @@ async function dispatch(userId, userMessage, replyToken) {
     const hasWriteAction = actions.some(a =>
       ['todo_add', 'todo_setup_recurring', 'calendar_add', 'calendar_add_multi'].includes(a.action)
     );
+    // カレンダー表示のみ求めている場合はtodo_listをスキップ
+    const hasCalendarList = actions.some(a => a.action === 'calendar_list' || a.action === 'calendar_check');
     const results = [];
     for (const actionItem of actions) {
       if (hasWriteAction && (actionItem.action === 'todo_list' || actionItem.action === 'calendar_list')) continue;
+      if (hasCalendarList && actionItem.action === 'todo_list') continue;
       try {
         const text = await resolveActionText(actionItem, session, userMessage);
         if (text) results.push(text);
