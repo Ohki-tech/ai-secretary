@@ -555,7 +555,17 @@ async function dispatch(userId, userMessage, replyToken) {
   }
 
   // 「①に〇〇と返信して/返事して」→ 番号でメール参照して返信処理
-  const refEmail = resolveEmailRef(userMessage, session.lastEmails || []);
+  // lastEmailsが空でも番号+返信パターンがあれば自動取得してから処理
+  let refEmail = resolveEmailRef(userMessage, session.lastEmails || []);
+  if (!refEmail && /[①-⑩]/.test(userMessage) && /返信|返事|返答|reply/i.test(userMessage)) {
+    try {
+      const fetched = await gmailClient.listUnread(5, `in:inbox is:unread ${EXCLUDE_REAL_ESTATE}`);
+      session.lastEmails = fetched;
+      refEmail = resolveEmailRef(userMessage, fetched);
+    } catch (e) {
+      logger.warn('dispatcher', 'メール自動取得失敗', { error: e.message });
+    }
+  }
   if (refEmail && /返信|返事|返答|reply/i.test(userMessage)) {
     try {
       const original = await gmailClient.readMessage(refEmail.id);
