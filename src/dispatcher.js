@@ -195,11 +195,11 @@ function setPending(session, action, data) {
 }
 
 function dateLabel(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00+09:00');
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
+  // 正午JST(03:00 UTC)で曜日計算 → UTC環境でも日付ずれが起きない
+  const d = new Date(dateStr + 'T12:00:00+09:00');
+  const [, mm, dd] = dateStr.split('-').map(Number);
   const wd = WEEKDAY_JA[d.getDay()];
-  return `${month}月${day}日（${wd}）`;
+  return `${mm}月${dd}日（${wd}）`;
 }
 
 // 予定の確認メッセージ用時刻フォーマット（JST固定）

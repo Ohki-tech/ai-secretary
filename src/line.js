@@ -178,11 +178,11 @@ function _formatTime(isoStr) {
 }
 
 function _dateLabel(isoStr) {
-  const d = new Date(isoStr + 'T00:00:00+09:00');
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
+  // 正午JST(03:00 UTC)で曜日計算 → UTC環境でも日付ずれが起きない
+  const d = new Date(isoStr + 'T12:00:00+09:00');
+  const [, mm, dd] = isoStr.split('-').map(Number);
   const wd = WEEKDAY_JA[d.getDay()];
-  return `${month}月${day}日（${wd}）`;
+  return `${mm}月${dd}日（${wd}）`;
 }
 
 function formatGmailList(emails) {
