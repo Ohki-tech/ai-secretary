@@ -757,8 +757,11 @@ async function dispatch(userId, userMessage, replyToken) {
   ) {
     try {
       const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tokyo' });
-      const events = await calendarClient.listEvents(today, 1);
-      const text = formatCalendarEvents(events, dateLabel(today), 1);
+      const days = /一週間|1週間|今週|週間|7日/.test(userMessage) ? 7
+                 : /明日/.test(userMessage) ? 2
+                 : 1;
+      const events = await calendarClient.listEvents(today, days);
+      const text = formatCalendarEvents(events, dateLabel(today), days);
       await lineClient.replyMessage(replyToken, text);
     } catch (e) {
       await lineClient.replyMessage(replyToken, `スケジュールの取得に失敗しました: ${e.message}`);
