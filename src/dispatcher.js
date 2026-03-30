@@ -789,7 +789,7 @@ async function dispatch(userId, userMessage, replyToken) {
   });
 
   session.lastMessages.push({ role: 'user', content: userMessage });
-  if (session.lastMessages.length > 10) session.lastMessages.shift();
+  if (session.lastMessages.length > 4) session.lastMessages.shift();
 
   // ── ambiguous（判断不能）応答の処理 ─────────────────────
   if (intent.ambiguous && intent.ambiguous_question) {
