@@ -49,8 +49,9 @@ async function getAuthClient() {
         logger.warn('google_auth', `RENDER_GOOGLE_TOKEN_JSON更新値: ${JSON.stringify({ ...tokenJson, ...credentials })}`);
       }
     } catch (e) {
-      logger.error('google_auth', 'トークンリフレッシュ失敗', { error: e.message });
-      throw new Error('Googleトークンの更新に失敗しました。node tools/setup.js を再実行してください');
+      const detail = e?.response?.data?.error || e.message || String(e);
+      logger.error('google_auth', 'トークンリフレッシュ失敗', { error: detail });
+      throw new Error(`Googleトークンの更新に失敗しました (${detail})。node tools/setup.js を再実行し、GitHub SecretsとRenderのRENDER_GOOGLE_TOKEN_JSONを両方更新してください`);
     }
   }
 
