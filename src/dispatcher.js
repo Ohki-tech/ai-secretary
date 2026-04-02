@@ -217,11 +217,12 @@ async function executePending(session, replyToken) {
   switch (pendingAction) {
     case 'calendar_add':
     case 'calendar_add_force': {
-      const { title, start, end, description } = pendingData;
+      const { title, start, end, description, location } = pendingData;
       try {
-        await calendarClient.addEventForce(title, start, end, description || '');
+        await calendarClient.addEventForce(title, start, end, description || '', location || '');
         const label = formatEventLabel({ start, end });
-        await lineClient.replyMessage(replyToken, `✅ 追加しました\n${title}\n${label}`);
+        const locLine = location ? `\n📍 ${location}` : '';
+        await lineClient.replyMessage(replyToken, `✅ カレンダーに登録しました\n${title}\n${label}${locLine}`);
       } catch (e) {
         await lineClient.replyMessage(replyToken, `❌ 追加に失敗しました: ${e.message}`);
       }
@@ -883,16 +884,22 @@ async function dispatch(userId, userMessage, replyToken) {
 
     case 'calendar_add': {
       try {
-        const conflicts = await calendarClient.checkConflict(params.start, params.end);
+        // 重複チェック（失敗しても確認フローは継続する）
+        let conflicts = [];
+        try {
+          conflicts = await calendarClient.checkConflict(params.start, params.end);
+        } catch (_) { /* 認証エラー等でも確認フローは続行 */ }
+
+        const label = formatEventLabel(params);
+        const locLine = params.location ? `\n📍 ${params.location}` : '';
         if (conflicts.length > 0) {
           const conflictNames = conflicts.map(c => c.title).join('、');
           setPending(session, 'calendar_add_force', params);
-          await lineClient.replyMessage(replyToken, `⚠️ 重複があります\n「${conflictNames}」が入っています。それでも追加しますか？`);
+          await lineClient.replyMessage(replyToken, `⚠️ 重複があります\n「${conflictNames}」が入っています。それでも追加しますか？\n\n${params.title}\n${label}${locLine}`);
           return;
         }
-        const label = formatEventLabel(params);
         setPending(session, 'calendar_add', params);
-        await lineClient.replyMessage(replyToken, `「${params.title}」を\n${label}に追加してよいですか？`);
+        await lineClient.replyMessage(replyToken, `「${params.title}」を\n${label}に追加してよいですか？${locLine}`);
       } catch (e) {
         await lineClient.replyMessage(replyToken, `カレンダー追加に失敗しました: ${e.message}`);
       }

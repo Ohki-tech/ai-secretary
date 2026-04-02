@@ -115,20 +115,22 @@ class GoogleCalendarClient {
     });
   }
 
-  async addEventForce(title, start, end, description = '') {
+  async addEventForce(title, start, end, description = '', location = '') {
     if (new Date(start) >= new Date(end)) {
       throw new Error('終了時刻が開始時刻より前または同じです');
     }
     return withRetry(async () => {
       const calendar = await this._getCalendar();
+      const requestBody = {
+        summary: title,
+        description,
+        start: { dateTime: start, timeZone: 'Asia/Tokyo' },
+        end: { dateTime: end, timeZone: 'Asia/Tokyo' },
+      };
+      if (location) requestBody.location = location;
       const res = await calendar.events.insert({
         calendarId: this.calendarId,
-        requestBody: {
-          summary: title,
-          description,
-          start: { dateTime: start, timeZone: 'Asia/Tokyo' },
-          end: { dateTime: end, timeZone: 'Asia/Tokyo' },
-        },
+        requestBody,
       });
       return {
         success: true,
