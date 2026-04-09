@@ -618,7 +618,7 @@ async function dispatch(userId, userMessage, replyToken) {
 
   // TODO操作をキーワードで確実に判定
   // ※ 「TODO」という文字列がなくても、TODOリスト形式（🟡[中]...）があればTODOコンテキストと判定
-  const hasTodoKeyword = /TODO/i.test(userMessage);
+  const hasTodoKeyword = /TODO|タスク/i.test(userMessage);
   // ※ emoji を文字クラス [] に入れるとサロゲートペア問題が起きるため交替形式 (A|B|C) を使う
   const hasTodoListFormat = /(🔴|🟡|🟢)\s*\[(?:高|中|低)\]/.test(userMessage);
   if (hasTodoKeyword || hasTodoListFormat) {
@@ -690,15 +690,22 @@ async function dispatch(userId, userMessage, replyToken) {
       const msgLines = userMessage.trim().split(/[\n\r]+/);
       if (!hasMultipleItems && !hasReminder && msgLines.length >= 2) {
         const lastLine = msgLines[msgLines.length - 1];
-        if (/todo[をが]?[\s　]*(追加|加えて|入れて)/i.test(lastLine)) {
+        // 「todoに入れて」「タスクに追加して」など（にへをが を許容）
+        if (/(?:todo|タスク)[をがにへ]?[\s　]*(追加|加えて|入れて)/i.test(lastLine)) {
           const candidate = msgLines.slice(0, -1).join(' ').replace(/[「」『』【】]/g, '').trim();
           if (candidate.length > 1) multilineTitle = candidate;
         }
       }
 
-      const m = !hasMultipleItems && !hasReminder && !multilineTitle
-        ? flat.match(/TODO[にへ]?[\s　]*(.+?)[\s　]*[をが]?[\s　]*(追加|加えて|入れて|add|登録)/i)
+      // 「TODOに TITLE を 入れて」パターン
+      const mTodoFirst = !hasMultipleItems && !hasReminder && !multilineTitle
+        ? flat.match(/(?:TODO|タスク)[にへ]?[\s　]*(.+?)[\s　]*[をが]?[\s　]*(追加|加えて|入れて|add|登録)/i)
         : null;
+      // 「TITLE を TODOに 入れて」パターン（自然な語順）
+      const mTitleFirst = !hasMultipleItems && !hasReminder && !multilineTitle
+        ? flat.match(/^(.+?)[をが][\s　]*(?:TODO|タスク)[をがにへ]?[\s　]*(追加|加えて|入れて|add|登録)/i)
+        : null;
+      const m = mTodoFirst || mTitleFirst;
 
       // タイトル候補を決定（マルチライン優先 → 正規表現 → フォールスルー）
       let rawTitle = multilineTitle || (m ? m[1].trim() : null);
