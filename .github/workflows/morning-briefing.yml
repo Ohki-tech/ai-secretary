@@ -58,6 +58,22 @@ jobs:
             echo "type=morning" >> $GITHUB_OUTPUT
           fi
 
+      - name: トークン健全性チェック（ブリーフィング前）
+        run: |
+          node -e "
+            require('dotenv').config();
+            const { checkTokenHealth } = require('./src/lib/google_auth');
+            const h = checkTokenHealth();
+            console.log('Token health:', JSON.stringify(h, null, 2));
+            if (!h.healthy) {
+              console.error('::error::' + h.message);
+              process.exit(1);
+            }
+            if (h.daysLeft !== null && h.daysLeft < 3) {
+              console.warn('::warning::' + h.message);
+            }
+          "
+
       - name: ブリーフィングを送信
         run: node src/briefing.js ${{ steps.type.outputs.type }}
 
@@ -67,7 +83,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "GH_PAT が未設定のためトークン書き戻しをスキップします"
+            echo "::warning::GH_PAT が未設定のためトークン書き戻しをスキップします。自動更新にはGH_PATの設定が必要です"
             exit 0
           fi
           if [ ! -f tokens/google_token.json ]; then
@@ -76,4 +92,4 @@ jobs:
           fi
           TOKEN=$(cat tokens/google_token.json)
           gh secret set RENDER_GOOGLE_TOKEN_JSON --body "$TOKEN" --repo ${{ github.repository }}
-          echo "✅ RENDER_GOOGLE_TOKEN_JSON を更新しました"
+          echo "✅ RENDER_GOOGLE_TOKEN_JSON を GitHub Secrets に書き戻しました"

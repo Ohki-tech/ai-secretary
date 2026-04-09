@@ -151,6 +151,27 @@ async function generateEvening() {
 async function run() {
   const lineClient = new LineClient();
   const type = process.argv[2] || 'morning';
+
+  // トークン健全性チェック（ブリーフィング実行前に警告）
+  try {
+    const { checkTokenHealth } = require('./lib/google_auth');
+    const health = checkTokenHealth();
+    if (!health.healthy) {
+      console.error(`[briefing] ⚠️ トークン異常: ${health.message}`);
+      // LINEでも警告通知
+      await lineClient.pushMessages([
+        `🚨 Google認証トークン警告\n\n${health.message}`
+      ]);
+    } else if (health.daysLeft !== null && health.daysLeft < 3) {
+      console.warn(`[briefing] ⚠️ ${health.message}`);
+      await lineClient.pushMessages([
+        `⚠️ Google認証トークン注意\n\n${health.message}`
+      ]);
+    }
+  } catch (healthErr) {
+    console.error('[briefing] トークンヘルスチェック失敗:', healthErr.message);
+  }
+
   const messages = type === 'evening' ? await generateEvening() : await generateMorning();
   await lineClient.pushMessages(messages);
   console.log(`[briefing] ${type} 送信完了`);
@@ -200,12 +221,18 @@ if (require.main === module) {
   run().catch(async err => {
     console.error(err);
     // INVALID_GRANT 発生時はLINEで緊急通知
-    if (String(err.message).includes('INVALID_GRANT')) {
+    if (String(err.message).includes('INVALID_GRANT') || err.code === 'INVALID_GRANT') {
       try {
-        await lineClient.pushMessage(
-          process.env.LINE_USER_ID,
-          '🚨【要対応】Googleトークンが失効しました\n\nnode tools/setup.js を実行して再認証し、\nGitHub SecretsとRenderの\nRENDER_GOOGLE_TOKEN_JSONを両方更新してください'
-        );
+        const emergencyLine = new LineClient();
+        await emergencyLine.pushMessages([
+          '🚨【要対応】Googleトークンが失効しました\n\n' +
+          '【恒久修正】Google Cloud Console > OAuth同意画面\n' +
+          '→ 公開ステータスを「本番」に変更\n' +
+          '（テストモードでは7日で自動失効します）\n\n' +
+          '【応急処置】node tools/setup.js を再実行し、\n' +
+          'GitHub SecretsとRenderの\n' +
+          'RENDER_GOOGLE_TOKEN_JSONを両方更新してください'
+        ]);
       } catch (_) { /* 通知失敗は無視 */ }
     }
     process.exit(1);

@@ -6,8 +6,9 @@ const { google } = require('googleapis');
 const logger = require('./logger');
 
 const TOKEN_PATH = path.join(__dirname, '../../tokens/google_token.json');
-const REFRESH_MARGIN_MS = 10 * 60 * 1000; // 10 minutes
-const REFRESH_TOKEN_MAX_AGE_MS = 6 * 24 * 60 * 60 * 1000; // 6日（7日期限の前日に警告）
+const REFRESH_MARGIN_MS = 30 * 60 * 1000; // 30分前にプロアクティブリフレッシュ（旧: 10分）
+const REFRESH_TOKEN_WARN_AGE_MS = 5 * 24 * 60 * 60 * 1000; // 5日で警告（余裕を持つ）
+const REFRESH_TOKEN_MAX_AGE_MS = 6 * 24 * 60 * 60 * 1000;  // 6日で危険
 
 function loadTokenJson() {
   if (process.env.RENDER_GOOGLE_TOKEN_JSON) {
@@ -19,6 +20,79 @@ function loadTokenJson() {
   throw new Error('Googleトークンが見つかりません。node tools/setup.js を実行して認証してください');
 }
 
+/** トークンファイルに保存（ディレクトリ存在時のみ） */
+function saveTokenJson(tokenData) {
+  const dir = path.dirname(TOKEN_PATH);
+  if (fs.existsSync(dir)) {
+    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokenData, null, 2));
+    logger.info('google_auth', 'トークンファイルを更新しました');
+  }
+}
+
+/**
+ * refresh_token の健全性チェック
+ * @returns {{ healthy: boolean, daysLeft: number|null, message: string }}
+ */
+function checkTokenHealth() {
+  try {
+    const tokenJson = loadTokenJson();
+
+    // refresh_token_expires_in があれば7日制限（テストモード）を検出
+    if (tokenJson.refresh_token_expires_in) {
+      const expiresInSec = tokenJson.refresh_token_expires_in;
+      const createdAt = tokenJson.refresh_token_created_at || 0;
+      const expiresAt = createdAt + expiresInSec * 1000;
+      const msLeft = expiresAt - Date.now();
+      const daysLeft = msLeft / 86400000;
+
+      if (msLeft <= 0) {
+        return {
+          healthy: false,
+          daysLeft: 0,
+          message: `refresh_tokenは既に失効しています（${Math.abs(Math.floor(daysLeft))}日前）。Google Cloud ConsoleでOAuthアプリを「本番」モードに変更し、node tools/setup.js を再実行してください`,
+        };
+      }
+      if (daysLeft < 2) {
+        return {
+          healthy: false,
+          daysLeft: Math.floor(daysLeft),
+          message: `refresh_tokenの残り寿命: ${daysLeft.toFixed(1)}日。Google Cloud ConsoleでOAuthアプリを「本番」モードに変更してください（テストモードでは7日で失効します）`,
+        };
+      }
+      // テストモードの警告（まだ動作はする）
+      return {
+        healthy: true,
+        daysLeft: Math.floor(daysLeft),
+        message: `⚠️ テストモード検出: refresh_tokenの残り${daysLeft.toFixed(1)}日。本番モードに変更すれば無期限になります`,
+      };
+    }
+
+    // refresh_token_created_at ベースのチェック（フォールバック）
+    if (tokenJson.refresh_token_created_at) {
+      const age = Date.now() - tokenJson.refresh_token_created_at;
+      const daysOld = age / 86400000;
+      if (age > REFRESH_TOKEN_MAX_AGE_MS) {
+        return {
+          healthy: false,
+          daysLeft: 0,
+          message: `refresh_tokenが${Math.floor(daysOld)}日経過。失効の可能性が高い`,
+        };
+      }
+      if (age > REFRESH_TOKEN_WARN_AGE_MS) {
+        return {
+          healthy: true,
+          daysLeft: Math.max(0, 7 - Math.floor(daysOld)),
+          message: `refresh_tokenが${Math.floor(daysOld)}日経過。まもなく失効する可能性あり`,
+        };
+      }
+    }
+
+    return { healthy: true, daysLeft: null, message: 'トークンは正常です' };
+  } catch (e) {
+    return { healthy: false, daysLeft: null, message: `トークン読み込みエラー: ${e.message}` };
+  }
+}
+
 async function getAuthClient() {
   let tokenJson;
   try {
@@ -27,12 +101,12 @@ async function getAuthClient() {
     throw new Error(`Google認証エラー: ${e.message}`);
   }
 
-  // refresh_token の経過日数チェック（7日で失効する可能性）
-  if (tokenJson.refresh_token_created_at) {
-    const age = Date.now() - tokenJson.refresh_token_created_at;
-    if (age > REFRESH_TOKEN_MAX_AGE_MS) {
-      logger.warn('google_auth', `refresh_tokenが${Math.floor(age/86400000)}日経過。まもなくinvalid_grantが発生する可能性があります。node tools/setup.js を再実行してください`);
-    }
+  // refresh_token の健全性チェック
+  const health = checkTokenHealth();
+  if (!health.healthy) {
+    logger.error('google_auth', health.message);
+  } else if (health.daysLeft !== null && health.daysLeft < 5) {
+    logger.warn('google_auth', health.message);
   }
 
   const oauth2 = new google.auth.OAuth2(
@@ -42,31 +116,51 @@ async function getAuthClient() {
   );
   oauth2.setCredentials(tokenJson);
 
-  // Auto-refresh if expiry_date is set and within margin
+  // プロアクティブリフレッシュ: 期限30分前 OR 期限が不明な場合は毎回リフレッシュ試行
   const expiry = tokenJson.expiry_date;
-  if (expiry && Date.now() > expiry - REFRESH_MARGIN_MS) {
+  const needsRefresh = !expiry || Date.now() > expiry - REFRESH_MARGIN_MS;
+
+  if (needsRefresh) {
     try {
-      logger.info('google_auth', 'トークンを自動リフレッシュ中...');
+      logger.info('google_auth', 'アクセストークンを自動リフレッシュ中...');
       const { credentials } = await oauth2.refreshAccessToken();
       oauth2.setCredentials(credentials);
-      // リフレッシュ済みトークンを保存（refresh_token_created_at を引き継ぐ）
-      const merged = { ...tokenJson, ...credentials };
-      if (fs.existsSync(path.dirname(TOKEN_PATH))) {
-        fs.writeFileSync(TOKEN_PATH, JSON.stringify(merged, null, 2));
-        logger.info('google_auth', 'リフレッシュ済みトークンを保存しました');
-      }
+
+      // リフレッシュ成功 → refresh_token_created_at をリセット（生存証明）
+      const merged = {
+        ...tokenJson,
+        ...credentials,
+        refresh_token_created_at: tokenJson.refresh_token_created_at,
+        // refresh_token が新たに返された場合は created_at も更新
+        ...(credentials.refresh_token && credentials.refresh_token !== tokenJson.refresh_token
+          ? { refresh_token_created_at: Date.now() }
+          : {}),
+      };
+      saveTokenJson(merged);
+      logger.info('google_auth', 'アクセストークンのリフレッシュ完了');
     } catch (e) {
       const detail = e?.response?.data?.error || e.message || String(e);
-      logger.error('google_auth', 'トークンリフレッシュ失敗', { error: detail });
       const isInvalidGrant = detail === 'invalid_grant' || String(e).includes('invalid_grant');
+
       if (isInvalidGrant) {
-        throw new Error(`INVALID_GRANT: refresh_tokenが失効しました。node tools/setup.js を再実行し、GitHub SecretsとRenderのRENDER_GOOGLE_TOKEN_JSONを両方更新してください`);
+        logger.error('google_auth', 'INVALID_GRANT検出 — refresh_token失効', { error: detail });
+        const err = new Error(
+          'INVALID_GRANT: refresh_tokenが失効しました。\n\n' +
+          '【恒久修正】Google Cloud Console > OAuth同意画面 > 公開ステータスを「本番」に変更\n' +
+          '（テストモードではrefresh_tokenが7日で自動失効します）\n\n' +
+          '【応急処置】node tools/setup.js を再実行し、GitHub SecretsとRenderのRENDER_GOOGLE_TOKEN_JSONを両方更新してください'
+        );
+        err.code = 'INVALID_GRANT';
+        throw err;
       }
-      throw new Error(`Googleトークンの更新に失敗しました (${detail})。node tools/setup.js を再実行し、GitHub SecretsとRenderのRENDER_GOOGLE_TOKEN_JSONを両方更新してください`);
+
+      // INVALID_GRANT以外のリフレッシュ失敗（ネットワーク障害等）
+      // → access_tokenがまだ有効かもしれないので、スロー前に一度APIを試す
+      logger.warn('google_auth', `リフレッシュ失敗（${detail}）。既存トークンで続行を試みます`);
     }
   }
 
   return oauth2;
 }
 
-module.exports = { getAuthClient };
+module.exports = { getAuthClient, checkTokenHealth };
