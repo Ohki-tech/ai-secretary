@@ -705,7 +705,11 @@ async function dispatch(userId, userMessage, replyToken) {
       const mTitleFirst = !hasMultipleItems && !hasReminder && !multilineTitle
         ? flat.match(/^(.+?)[をが][\s　]*(?:TODO|タスク)[をがにへ]?[\s　]*(追加|加えて|入れて|add|登録)/i)
         : null;
-      const m = mTodoFirst || mTitleFirst;
+      // 「TITLE + TODO + 追加」パターン（区切り文字なし: 「まつど売却活動Todo追加」など）
+      const mConcatTodo = !hasMultipleItems && !hasReminder && !multilineTitle
+        ? flat.match(/^(.+?)(?:TODO|タスク)[にへをが]?[\s　]*(追加|加えて|入れて|add|登録)/i)
+        : null;
+      const m = mTodoFirst || mTitleFirst || mConcatTodo;
 
       // タイトル候補を決定（マルチライン優先 → 正規表現 → フォールスルー）
       let rawTitle = multilineTitle || (m ? m[1].trim() : null);
@@ -828,7 +832,8 @@ async function dispatch(userId, userMessage, replyToken) {
     const msgHasCalOnly   = /カレンダー.*入れ|スケジュール.*入れ|予定.*入れ|登録/i.test(userMessage) &&
                             !/todo|タスク|todoも|カレンダーにも/i.test(userMessage);
     if (msgHasTodoOnly) {
-      actions = actions.filter(a => !['calendar_add','calendar_add_multi','calendar_add_force'].includes(a.action));
+      // TODOのみ指示 → calendar系・gmail系をすべて除去（メール一覧が混入するバグ防止）
+      actions = actions.filter(a => !['calendar_add','calendar_add_multi','calendar_add_force','gmail_list','gmail_draft','gmail_send'].includes(a.action));
     }
     if (msgHasCalOnly) {
       actions = actions.filter(a => !['todo_add','todo_setup_recurring'].includes(a.action));
