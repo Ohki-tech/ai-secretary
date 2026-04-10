@@ -769,11 +769,12 @@ async function dispatch(userId, userMessage, replyToken) {
     try {
       const isTomorrow = /明日/.test(userMessage) && !/明後日/.test(userMessage);
       const isWeek = /一週間|1週間|今週|週間|7日/.test(userMessage);
-      const nowJst = jstNow();
-      let baseDate = nowJst.toLocaleDateString('en-CA', { timeZone: 'Asia/Tokyo' });
+      // new Date() → 'Asia/Tokyo' で直接変換（jstNow()経由だとUTC環境で二重変換になり翌日になるバグを防ぐ）
+      let baseDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Tokyo' });
       if (isTomorrow) {
-        const tom = new Date(nowJst); tom.setDate(nowJst.getDate() + 1);
-        baseDate = tom.toLocaleDateString('en-CA', { timeZone: 'Asia/Tokyo' });
+        const [y, m, d] = baseDate.split('-').map(Number);
+        const tom = new Date(y, m - 1, d + 1);
+        baseDate = `${tom.getFullYear()}-${String(tom.getMonth()+1).padStart(2,'0')}-${String(tom.getDate()).padStart(2,'0')}`;
       }
       const days = isWeek ? 7 : 1;
       const events = await calendarClient.listEvents(baseDate, days);
