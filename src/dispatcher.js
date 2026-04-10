@@ -743,7 +743,7 @@ async function dispatch(userId, userMessage, replyToken) {
       // 複数項目・リマインド付き・タイトル取れない場合はAIへフォールスルー
     } else if (/完了|終わった|done|済み/.test(userMessage)) {
       // TODO完了もAIへフォールスルー
-    } else if (/見せて|一覧|リスト|確認|表示|は？|教えて/.test(userMessage)) {
+    } else if (/見せて|一覧|リスト|確認|表示|は？|教えて|出して|ちょうだい|見たい|どんな感じ/.test(userMessage)) {
       // 「済み/完了タスク」はAIへ（completedフィルターが必要）
       if (!/済み|完了/.test(userMessage)) {
         try {
@@ -763,7 +763,8 @@ async function dispatch(userId, userMessage, replyToken) {
   if (
     /スケジュール|予定|カレンダー/.test(userMessage) &&
     /確認|見せて|出して|チェック|教えて|表示|一覧/.test(userMessage) &&
-    !/追加|登録|作成|変更|削除|入れて/.test(userMessage)
+    !/追加|登録|作成|変更|削除|入れて/.test(userMessage) &&
+    !/TODO|タスク/i.test(userMessage)  // TODO/タスクが含まれる場合はカレンダーに横取りさせない
   ) {
     try {
       const isTomorrow = /明日/.test(userMessage) && !/明後日/.test(userMessage);
