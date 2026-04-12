@@ -12,16 +12,19 @@
 require('dotenv').config();
 const { LineClient } = require('./line');
 
-const GROUP_ID   = process.env.LINE_GROUP_ID_REMINDER;
-const SENDER_NAME  = process.env.REMINDER_SENDER_NAME  || '担当者';
-const CONTACT_INFO = process.env.REMINDER_CONTACT_INFO || '担当者のメールまたはLINE';
+const GROUP_ID      = process.env.LINE_GROUP_ID_REMINDER;
+const SENDER_NAME   = process.env.REMINDER_SENDER_NAME   || '担当者';
+const CONTACT_INFO  = process.env.REMINDER_CONTACT_INFO  || '担当者のメールまたはLINE';
+const TARGET_GROUP  = process.env.REMINDER_TARGET_GROUP  || '皆さま';
+const DOCUMENT_NAME = process.env.REMINDER_DOCUMENT_NAME || '書類';
+const DEADLINE_DESC = process.env.REMINDER_DEADLINE_DESC || '各月第三金曜日';
 
 const MESSAGE_SECOND_FRIDAY = `${TARGET_GROUP}
 お世話になります。${SENDER_NAME}です。
 ${DOCUMENT_NAME}について今月分取りまとめたくリマインドのご連絡失礼致します。
 ${CONTACT_INFO}
 まで送付をお願いできますでしょうか。
-期限は各月第三金曜日となっております。
+期限は${DEADLINE_DESC}となっております。
 締め切り前日にもう一度リマインドいたします。
 どうぞよろしくお願いします。`;
 
